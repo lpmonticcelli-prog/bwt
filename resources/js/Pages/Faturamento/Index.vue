@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { Head, useForm } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import UploadXML from '@/Components/UploadXML.vue';
 import ModalRaioXFaturamento from '@/Components/ModalRaioXFaturamento.vue';
 
@@ -8,14 +8,12 @@ const props = defineProps({
     faturamentosProcessados: { type: Array, default: () => [] }
 });
 
-const isProcessing = ref(false);
-
 const totais = computed(() => {
     let receita = 0;
     let custo = 0;
     let lucro = 0;
     
-    // Novas variáveis para separar os mundos
+    // Variáveis para separar os mundos
     let lucroPositivo = 0;
     let lucroNegativo = 0;
     
@@ -48,22 +46,6 @@ const formatMoney = (value) => {
 const itemSelecionado = ref(null);
 const abrirRaioX = (item) => itemSelecionado.value = item;
 const fecharRaioX = () => itemSelecionado.value = null;
-
-const form = useForm({ xml_files: [] });
-
-const enviarArquivosParaServidor = (arquivos) => {
-    if (!arquivos || arquivos.length === 0) return;
-    
-    isProcessing.value = true;
-    form.xml_files = Array.from(arquivos);
-    
-    form.post('/faturamento/processar', {
-        preserveScroll: true,
-        forceFormData: true,
-        onFinish: () => isProcessing.value = false,
-        onError: (erros) => alert("O Servidor recusou o envio:\n\n" + Object.values(erros).join('\n'))
-    });
-};
 </script>
 
 <template>
@@ -72,6 +54,14 @@ const enviarArquivosParaServidor = (arquivos) => {
     <div class="min-h-screen bg-slate-50 py-10">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             
+            <!-- NAVEGAÇÃO: BOTÃO VOLTAR -->
+            <div class="mb-4">
+                <Link href="/dashboard" class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-blue-600 transition-colors group">
+                    <svg class="w-4 h-4 mr-1 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                    Voltar para o Dashboard
+                </Link>
+            </div>
+
             <div class="mb-8 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
                 <div>
                     <h1 class="text-3xl font-black text-slate-900 tracking-tight">Painel de Rentabilidade</h1>
@@ -167,14 +157,8 @@ const enviarArquivosParaServidor = (arquivos) => {
                 </div>
 
                 <div class="lg:col-span-1 relative">
-                    <div v-if="isProcessing" class="absolute inset-0 z-10 bg-white/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center">
-                        <svg class="animate-spin h-8 w-8 text-blue-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span class="text-sm font-bold text-slate-700">Calculando Margens...</span>
-                    </div>
-                    <UploadXML @arquivos-selecionados="enviarArquivosParaServidor" />
+                    <!-- O componente de Fila (Chunk) entra aqui sozinho, cuidando de todo o processo de envio e carregamento -->
+                    <UploadXML />
                 </div>
             </div>
         </div>

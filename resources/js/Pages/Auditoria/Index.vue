@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { Head, useForm } from '@inertiajs/vue3';
+import { Head, Link } from '@inertiajs/vue3';
 import TermometroFinanceiro from '@/Components/TermometroFinanceiro.vue';
 import TabelaDivergencias from '@/Components/TabelaDivergencias.vue';
 import UploadXML from '@/Components/UploadXML.vue';
@@ -10,8 +10,6 @@ import ModalRaioX from '@/Components/ModalRaioX.vue';
 const props = defineProps({
     fretesProcessados: { type: Array, default: () => [] }
 });
-
-const isProcessing = ref(false);
 
 const totais = computed(() => {
     let cobrado = 0;
@@ -32,30 +30,6 @@ const itemSelecionado = ref(null);
 
 const abrirRaioX = (item) => itemSelecionado.value = item;
 const fecharRaioX = () => itemSelecionado.value = null;
-
-// O mensageiro oficial do Inertia (muito mais seguro para arquivos)
-const form = useForm({
-    xml_files: []
-});
-
-const enviarArquivosParaServidor = (arquivos) => {
-    if (!arquivos || arquivos.length === 0) return;
-    
-    isProcessing.value = true;
-    form.xml_files = Array.from(arquivos);
-    
-    form.post('/auditoria/processar', {
-        preserveScroll: true,
-        forceFormData: true,
-        onFinish: () => {
-            isProcessing.value = false;
-        },
-        onError: (erros) => {
-            // Este alerta vai jogar na tela exatamente o motivo da recusa do servidor
-            alert("O Servidor recusou o envio:\n\n" + Object.values(erros).join('\n'));
-        }
-    });
-};
 </script>
 
 <template>
@@ -63,6 +37,13 @@ const enviarArquivosParaServidor = (arquivos) => {
 
     <div class="min-h-screen bg-gray-50/50 py-10">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            
+            <div class="mb-4">
+                <Link href="/dashboard" class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors group">
+                    <svg class="w-4 h-4 mr-1 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                    Voltar para o Dashboard
+                </Link>
+            </div>
             
             <div class="mb-8 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
                 <div>
@@ -87,16 +68,9 @@ const enviarArquivosParaServidor = (arquivos) => {
                 <div class="lg:col-span-2">
                     <TabelaDivergencias :itens="fretesProcessados" @detalhar="abrirRaioX" />
                 </div>
+                
                 <div class="lg:col-span-1 relative">
-                    <div v-if="isProcessing" class="absolute inset-0 z-10 bg-white/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center">
-                        <svg class="animate-spin h-8 w-8 text-indigo-600 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span class="text-sm font-bold text-gray-700">Processando Notas...</span>
-                    </div>
-                    
-                    <UploadXML @arquivos-selecionados="enviarArquivosParaServidor" />
+                    <UploadXML />
                 </div>
             </div>
         </div>

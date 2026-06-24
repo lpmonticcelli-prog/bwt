@@ -17,4 +17,10 @@ class Frete extends Model
         'temTde' => 'boolean',
         'is_correto' => 'boolean',
     ];
+
+    // Conecta este frete ao seu Fechamento correspondente
+    public function fechamento()
+    {
+        return $this->belongsTo(FechamentoPeriodo::class, 'fechamento_periodo_id');
+    }
 }

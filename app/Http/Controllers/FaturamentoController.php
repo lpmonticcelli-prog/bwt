@@ -47,11 +47,14 @@ class FaturamentoController extends Controller
                 $nfeChave = $this->extractNfe($data);
                 $produto = $this->extractProduto($data);
                 
+                // NOVO: Extração de Inteligência da Operação
+                $dataEmissao = $this->extractDataEmissao($data);
+                $tipoOperacao = $this->extractTipoOperacao($observacoes, $tipoCTe);
+
                 if (!$cidadeDestino) continue;
 
                 $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
 
-                // Capta falhas nas planilhas e evita erros silenciosos
                 if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
                 if ($city->regions->isEmpty()) { $errosDetetive[] = "[{$cidadeDestino} sem Região]"; continue; }
 
@@ -67,7 +70,7 @@ class FaturamentoController extends Controller
 
                 $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
 
-                // 1. CUSTO E4LOG (O QUE VOCÊ PAGA)
+                // 1. CUSTO E4LOG
                 $custoFixo = (float) $ruleE4log->fixed_value;
                 $custoPct = (float) $ruleE4log->excess_percentage / 100;
                 $custoFreteBase = max($custoFixo, ($valorCarga * $custoPct));
@@ -75,14 +78,13 @@ class FaturamentoController extends Controller
                 $custoTde = 0;
                 if ($temTde) {
                     $tdePercentE4log = (float) ($ruleE4log->tde_percentage ?? 20); 
-                    // REGRA APLICADA: Mínimo 160 reais ou 20% sob o valor do frete base
                     $custoTde = max(160.00, $custoFreteBase * ($tdePercentE4log / 100));
                 }
                 
                 $custoTotalE4log = $custoFreteBase + $custoTde;
                 if ($tipoCTe == '1') { $custoFreteBase = 0; $custoTotalE4log = $custoTde; }
 
-                // 2. RECEITA BWT (O QUE VOCÊ COBRA DA SOL FÁCIL)
+                // 2. RECEITA BWT
                 $receitaFixo = (float) $ruleBwt->fixed_value;
                 $receitaPct = (float) $ruleBwt->excess_percentage / 100;
                 $receitaFretePct = $valorCarga * $receitaPct;
@@ -92,7 +94,6 @@ class FaturamentoController extends Controller
                 if ($temTde) {
                     $tdeMinBwt = (float) ($ruleBwt->tde_min_value ?? 200.00);
                     $tdePercentBwt = (float) ($ruleBwt->tde_percentage ?? 30);
-                    // REGRA APLICADA: Mínimo 200 reais ou 30% sob o valor do frete
                     $receitaTde = max($tdeMinBwt, $receitaFreteBase * ($tdePercentBwt / 100));
                 }
 
@@ -107,16 +108,16 @@ class FaturamentoController extends Controller
 
                 $lucroLiquido = $receitaBwtXML - $custoTotalE4log;
 
-                $nomeOperacao = 'Entrega Normal';
-                if ($tipoCTe == '1') $nomeOperacao = 'Complemento de Valor';
-                if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) $nomeOperacao = 'Devolução / Retorno';
-
                 $resultados[] = Faturamento::updateOrCreate(
                     ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
                     [
+                        'fechamento_periodo_id' => $request->input('fechamento_id'),
                         'destino' => Str::limit($cidadeDestino, 150, ''),
                         'regra' => Str::limit($regionBwt->name . " (Sol Fácil)", 100, ''),
-                        'tipo_cte' => Str::limit($nomeOperacao, 100, ''),
+                        'tipo_operacao' => Str::limit($tipoOperacao, 50, ''), // NOVO
+                        'data_emissao' => $dataEmissao, // NOVO
+                        'data_entrega' => null, // NOVO (Aguardando Baixa)
+                        'tipo_cte' => Str::limit($tipoOperacao, 100, ''), // Mantido para compatibilidade legado
                         'nfe_chave' => Str::limit($nfeChave, 250, ''),
                         'produto' => Str::limit($produto, 250, ''),
                         'valor_carga' => $valorCarga,
@@ -133,7 +134,6 @@ class FaturamentoController extends Controller
                 );
             }
 
-            // Grava os descartes no log do sistema
             if (!empty($errosDetetive)) {
                 Log::warning("Rentabilidade BWT - Lote parcial. Descartes: " . implode(" | ", array_unique($errosDetetive)));
             }
@@ -143,7 +143,6 @@ class FaturamentoController extends Controller
                 throw new Exception($motivo);
             }
 
-            // Responde via JSON para preservar o ecrã
             if ($request->wantsJson()) {
                 return response()->json(['success' => true]);
             }
@@ -182,5 +181,19 @@ class FaturamentoController extends Controller
             return (string) $prod;
         }
         return 'N/A';
+    }
+
+    // NOVAS FUNÇÕES EXTRATORAS DE INTELIGÊNCIA
+    private function extractDataEmissao($data) {
+        $base = $this->getBaseNode($data);
+        if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10);
+        return null;
+    }
+    
+    private function extractTipoOperacao($observacoes, $tipoCTe) {
+        if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução';
+        if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega';
+        if ($tipoCTe == '1') return 'Complemento';
+        return 'Entrega';
     }
 }

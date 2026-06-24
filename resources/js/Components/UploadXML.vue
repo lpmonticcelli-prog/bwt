@@ -3,6 +3,14 @@ import { ref, computed } from 'vue';
 import { router } from '@inertiajs/vue3';
 import axios from 'axios';
 
+// NOVO: Agora o componente aceita endereço, ID do fechamento e textos personalizados
+const props = defineProps({
+    endpoint: { type: String, default: null },
+    fechamentoId: { type: [String, Number], default: null },
+    titulo: { type: String, default: 'Processar Novo Lote' },
+    descricao: { type: String, default: 'Aguarde o envio em lotes para processar grandes quantidades de CT-e.' }
+});
+
 const emit = defineEmits(['arquivos-selecionados']);
 const isDragging = ref(false);
 const fileInput = ref(null);
@@ -32,17 +40,14 @@ const processFilesQueue = async (files) => {
     hasError.value = false;
     errorMessage.value = '';
 
-    // FATIAMENTO: Envia lotes de 50 XMLs
     const CHUNK_SIZE = 15;
     const chunks = [];
     for (let i = 0; i < fileArray.length; i += CHUNK_SIZE) {
         chunks.push(fileArray.slice(i, i + CHUNK_SIZE));
     }
 
-    // Identifica dinamicamente em qual tela o componente está (Faturamento ou Auditoria)
-    const endpoint = window.location.pathname.includes('faturamento') 
-        ? '/faturamento/processar' 
-        : '/auditoria/processar';
+    // Define para onde enviar (Usa a prop se existir, senão usa a lógica antiga de URL)
+    const finalEndpoint = props.endpoint || (window.location.pathname.includes('faturamento') ? '/faturamento/processar' : '/auditoria/processar');
 
     try {
         for (const chunk of chunks) {
@@ -50,19 +55,21 @@ const processFilesQueue = async (files) => {
             chunk.forEach(file => {
                 formData.append('xml_files[]', file);
             });
+            
+            // NOVO: Se estivermos dentro de um Fechamento, envia o ID para o Laravel carimbar a nota
+            if (props.fechamentoId) {
+                formData.append('fechamento_id', props.fechamentoId);
+            }
 
-            await axios.post(endpoint, formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data',
-                    'Accept': 'application/json'
-                }
+            await axios.post(finalEndpoint, formData, {
+                headers: { 'Content-Type': 'multipart/form-data', 'Accept': 'application/json' }
             });
 
             processedFiles.value += chunk.length;
         }
 
-        router.reload({ only: ['faturamentosProcessados', 'fretesProcessados', 'errors'] });
-        emit('arquivos-selecionados'); // Dispara evento de conclusão
+        router.reload({ only: ['faturamentosProcessados', 'fretesProcessados', 'errors', 'fechamento'] });
+        emit('arquivos-selecionados');
         
         setTimeout(() => {
             isUploading.value = false;
@@ -90,11 +97,11 @@ const onChange = (e) => {
 </script>
 
 <template>
-    <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6 h-full flex flex-col justify-between relative overflow-hidden">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6 h-full flex flex-col justify-between relative overflow-hidden group hover:border-indigo-200 transition-colors">
         <div v-if="isUploading" class="absolute inset-0 bg-white/60 backdrop-blur-sm z-10"></div>
         <div>
-            <h3 class="text-lg font-bold text-slate-800 mb-1">Processar Novo Lote</h3>
-            <p class="text-xs text-slate-500 mb-4">Aguarde o envio em lotes para processar grandes quantidades de CT-e.</p>
+            <h3 class="text-lg font-bold text-slate-800 mb-1">{{ titulo }}</h3>
+            <p class="text-xs text-slate-500 mb-4">{{ descricao }}</p>
         </div>
         
         <div 
@@ -104,7 +111,7 @@ const onChange = (e) => {
             @click="triggerSelect"
             :class="[
                 'border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-all cursor-pointer min-h-[180px]',
-                isDragging ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 bg-slate-50 hover:bg-slate-100/70',
+                isDragging ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200 bg-slate-50 group-hover:bg-slate-100/70',
                 isUploading ? 'opacity-50 cursor-not-allowed' : ''
             ]"
         >

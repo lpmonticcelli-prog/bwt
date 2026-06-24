@@ -50,13 +50,16 @@ class AuditController extends Controller
                 $observacoesTexto = strtoupper($this->extractObs($data));
                 $tipoCTe = $this->extractTipoCTe($data);
                 
+                // NOVO: Extração de Inteligência da Operação
+                $dataEmissao = $this->extractDataEmissao($data);
+                $tipoOperacao = $this->extractTipoOperacao($observacoesTexto, $tipoCTe);
+                
                 if (!$cidadeDestino) continue;
 
                 $city = City::where('name', $cidadeDestino)->with(['regions' => function($q) {
                     $q->where('context', 'e4log');
                 }, 'regions.pricingRules'])->first();
 
-                // Regista as cidades não encontradas para o ficheiro de log
                 if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
                 if ($city->regions->isEmpty()) { $errosDetetive[] = "[{$cidadeDestino} sem Região E4LOG]"; continue; }
 
@@ -73,13 +76,11 @@ class AuditController extends Controller
                 $taxasExtrasSomadas = 0;
                 $teveTdeOuRural = false;
 
-                // LÓGICA PARA CTE NORMAL (0)
                 if ($tipoCTe === '0') {
                     $taxaFixa = (float) $rule->fixed_value;
                     $porcentagem = (float) $rule->excess_percentage / 100;
                     $fretePorcentagem = $valorNF * $porcentagem;
                     
-                    // Compara o mínimo da tabela com o % ad valorem
                     $freteBaseCalculado = max($taxaFixa, $fretePorcentagem);
 
                     $componentesXML = $this->extractExtraFees($data);
@@ -99,13 +100,11 @@ class AuditController extends Controller
 
                     if ($teveTdeOuRural) {
                         $tdePercent = $rule->tde_percentage ?? 20; 
-                        // REGRA APLICADA: Mínimo 160 reais ou 20% sob o valor do frete
                         $valorTDECalculado = max(160.00, $freteBaseCalculado * ($tdePercent / 100));
                     }
 
                     $freteTotalFinalCalculado = $freteBaseCalculado + $valorTDECalculado + $taxasExtrasSomadas;
                 } 
-                // LÓGICA PARA CTE COMPLEMENTAR (1) OU OUTROS (Reentrega, Devolução)
                 else {
                      $freteTotalFinalCalculado = $valorCobradoE4log; 
                      if (str_contains($observacoesTexto, 'TDE') || str_contains($observacoesTexto, 'RURAL')) {
@@ -125,7 +124,11 @@ class AuditController extends Controller
                 $freteSalvo = Frete::updateOrCreate(
                     ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
                     [
+                        'fechamento_periodo_id' => $request->input('fechamento_id'),
                         'destino' => Str::limit($cidadeDestino, 150, ''),
+                        'tipo_operacao' => Str::limit($tipoOperacao, 50, ''), // NOVO
+                        'data_emissao' => $dataEmissao, // NOVO
+                        'data_entrega' => null, // NOVO (Aguardando Baixa)
                         'valorNF' => $valorNF,
                         'fixoRegra' => $taxaFixa,
                         'percentualRegra' => $rule->excess_percentage,
@@ -145,7 +148,6 @@ class AuditController extends Controller
                 $resultados[] = $freteSalvo;
             }
 
-            // Grava as cidades descartadas no log silenciosamente
             if (!empty($errosDetetive)) {
                 Log::warning("Auditoria E4LOG - Lote parcial. Descartes: " . implode(" | ", array_unique($errosDetetive)));
             }
@@ -155,7 +157,6 @@ class AuditController extends Controller
                 throw new Exception($motivo);
             }
 
-            // Responde para o Vue de forma silenciosa para não quebrar a fila
             if ($request->wantsJson()) {
                 return response()->json(['success' => true]);
             }
@@ -176,4 +177,18 @@ class AuditController extends Controller
     private function extractExtraFees($data) { $base = $this->getBaseNode($data); $fees = []; if ($base && isset($base['vPrest']['Comp'])) { $comps = $base['vPrest']['Comp']; if (isset($comps['xNome'])) $comps = [$comps]; foreach ($comps as $comp) { if (isset($comp['xNome']) && isset($comp['vComp'])) { $nome = strtoupper(trim((string)$comp['xNome'])); $fees[$nome] = (float)$comp['vComp']; } } } return $fees; }
     private function extractObs($data) { $base = $this->getBaseNode($data); if ($base && isset($base['compl']['xObs'])) return (string) $base['compl']['xObs']; return ''; }
     private function extractTipoCTe($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; return '0'; }
+    
+    // NOVAS FUNÇÕES EXTRATORAS DE INTELIGÊNCIA
+    private function extractDataEmissao($data) {
+        $base = $this->getBaseNode($data);
+        if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10);
+        return null;
+    }
+    
+    private function extractTipoOperacao($observacoes, $tipoCTe) {
+        if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução';
+        if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega';
+        if ($tipoCTe == '1') return 'Complemento';
+        return 'Entrega';
+    }
 }
