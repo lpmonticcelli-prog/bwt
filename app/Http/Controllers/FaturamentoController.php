@@ -65,7 +65,7 @@ class FaturamentoController extends Controller
 
                 $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
 
-                // 1. CUSTO E4LOG
+                // 1. CUSTO E4LOG (O QUE VOCÊ PAGA)
                 $custoFixo = (float) $ruleE4log->fixed_value;
                 $custoPct = (float) $ruleE4log->excess_percentage / 100;
                 $custoFreteBase = max($custoFixo, ($valorCarga * $custoPct));
@@ -73,13 +73,14 @@ class FaturamentoController extends Controller
                 $custoTde = 0;
                 if ($temTde) {
                     $tdePercentE4log = (float) ($ruleE4log->tde_percentage ?? 20); 
-                    $custoTde = ($custoFreteBase * ($tdePercentE4log / 100)) + 160.00;
+                    // REGRA APLICADA: Mínimo 160 reais ou 20% sob o valor do frete base
+                    $custoTde = max(160.00, $custoFreteBase * ($tdePercentE4log / 100));
                 }
                 
                 $custoTotalE4log = $custoFreteBase + $custoTde;
                 if ($tipoCTe == '1') { $custoFreteBase = 0; $custoTotalE4log = $custoTde; }
 
-                // 2. RECEITA BWT
+                // 2. RECEITA BWT (O QUE VOCÊ COBRA DA SOL FÁCIL)
                 $receitaFixo = (float) $ruleBwt->fixed_value;
                 $receitaPct = (float) $ruleBwt->excess_percentage / 100;
                 $receitaFretePct = $valorCarga * $receitaPct;
@@ -89,6 +90,7 @@ class FaturamentoController extends Controller
                 if ($temTde) {
                     $tdeMinBwt = (float) ($ruleBwt->tde_min_value ?? 200.00);
                     $tdePercentBwt = (float) ($ruleBwt->tde_percentage ?? 30);
+                    // REGRA APLICADA: Mínimo 200 reais ou 30% sob o valor do frete
                     $receitaTde = max($tdeMinBwt, $receitaFreteBase * ($tdePercentBwt / 100));
                 }
 
@@ -107,7 +109,6 @@ class FaturamentoController extends Controller
                 if ($tipoCTe == '1') $nomeOperacao = 'Complemento de Valor';
                 if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) $nomeOperacao = 'Devolução / Retorno';
 
-                // Usando Str::limit para NUNCA MAIS dar erro 1406 no MySQL
                 $resultados[] = Faturamento::updateOrCreate(
                     ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
                     [

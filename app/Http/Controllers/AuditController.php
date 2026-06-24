@@ -72,6 +72,8 @@ class AuditController extends Controller
                     $taxaFixa = (float) $rule->fixed_value;
                     $porcentagem = (float) $rule->excess_percentage / 100;
                     $fretePorcentagem = $valorNF * $porcentagem;
+                    
+                    // Compara o mínimo da tabela com o % ad valorem
                     $freteBaseCalculado = max($taxaFixa, $fretePorcentagem);
 
                     $componentesXML = $this->extractExtraFees($data);
@@ -91,16 +93,15 @@ class AuditController extends Controller
 
                     if ($teveTdeOuRural) {
                         $tdePercent = $rule->tde_percentage ?? 20; 
-                        $valorTDECalculado = ($freteBaseCalculado * ($tdePercent / 100)) + 160.00;
+                        // REGRA APLICADA: Mínimo 160 reais ou 20% sob o valor do frete
+                        $valorTDECalculado = max(160.00, $freteBaseCalculado * ($tdePercent / 100));
                     }
 
                     $freteTotalFinalCalculado = $freteBaseCalculado + $valorTDECalculado + $taxasExtrasSomadas;
                 } 
                 // LOGICA PARA CTE COMPLEMENTAR (1) OU OUTROS (Reentrega, Devolução)
                 else {
-                     // Aqui nós aceitamos o valor cobrado como o correto, pois foi um acordo específico fora de tabela
                      $freteTotalFinalCalculado = $valorCobradoE4log; 
-                     // Apenas para mostrar no modal do Raio-X que era uma taxa complementar
                      if (str_contains($observacoesTexto, 'TDE') || str_contains($observacoesTexto, 'RURAL')) {
                          $teveTdeOuRural = true;
                          $valorTDECalculado = $valorCobradoE4log;
@@ -149,9 +150,6 @@ class AuditController extends Controller
         }
     }
 
-    // ==========================================
-    // EXTRATORES DE XML
-    // ==========================================
     private function getBaseNode($data) {
         if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte'];
         if (isset($data['infCte'])) return $data['infCte'];
@@ -203,12 +201,11 @@ class AuditController extends Controller
         return '';
     }
 
-    // NOVO: Extrator do tipo de CT-e (Normal, Complemento, Anulação)
     private function extractTipoCTe($data) {
         $base = $this->getBaseNode($data);
         if ($base && isset($base['ide']['tpCTe'])) {
             return (string) $base['ide']['tpCTe'];
         }
-        return '0'; // Default para Normal
+        return '0';
     }
 }

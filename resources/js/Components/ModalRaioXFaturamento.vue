@@ -32,32 +32,14 @@ const extractNfeNumber = (chave) => {
                         </button>
                     </div>
 
-                    <div class="mb-6 grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50 p-4 rounded-lg border border-slate-200">
-                        <div>
-                            <p class="text-[10px] font-bold text-slate-400 uppercase">NF / Carga</p>
-                            <p class="text-sm font-bold text-slate-800">{{ extractNfeNumber(item.nfe_chave) }}</p>
+                    <div class="mb-6 flex justify-around items-center bg-slate-50 p-4 rounded-lg border border-slate-200">
+                        <div class="text-center w-1/2">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">NF / Carga</p>
+                            <p class="text-lg font-bold text-slate-800">{{ extractNfeNumber(item.nfe_chave) }}</p>
                         </div>
-                        <div>
-                            <p class="text-[10px] font-bold text-slate-400 uppercase">Mercadoria</p>
-                            <p class="text-sm font-bold text-slate-800 truncate" :title="item.produto">{{ item.produto }}</p>
-                        </div>
-                        <div>
-                            <p class="text-[10px] font-bold text-slate-400 uppercase">Valor da NF</p>
-                            <p class="text-sm font-bold text-slate-800">{{ formatMoney(item.valor_carga) }}</p>
-                        </div>
-                        <div>
-                            <p class="text-[10px] font-bold text-slate-400 uppercase">Tipo Operação</p>
-                            <span class="px-2 py-0.5 text-xs font-bold rounded" :class="item.tipo_cte === 'Entrega Normal' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'">{{ item.tipo_cte }}</span>
-                        </div>
-                        <div class="col-span-2 lg:col-span-4 mt-2 pt-2 border-t border-slate-200 flex justify-between items-center">
-                            <div>
-                                <p class="text-[10px] font-bold text-slate-400 uppercase">Destino Final</p>
-                                <p class="text-lg font-black text-slate-900">{{ item.destino }}</p>
-                            </div>
-                            <div class="text-right">
-                                <p class="text-[10px] font-bold text-slate-400 uppercase">Regra Aplicada</p>
-                                <p class="text-sm font-bold text-blue-600">{{ item.regra }}</p>
-                            </div>
+                        <div class="text-center w-1/2 border-l border-slate-200">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Valor do Frete</p>
+                            <p class="text-lg font-bold text-slate-800">{{ formatMoney(item.receita_real) }}</p>
                         </div>
                     </div>
 
