@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\City;
 use App\Models\Faturamento;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Throwable;
 use Exception;
@@ -24,7 +25,7 @@ class FaturamentoController extends Controller
         try {
             \DB::connection()->getPdo();
 
-            if (!$request->hasFile('xml_files')) throw new Exception("Nenhum arquivo recebido.");
+            if (!$request->hasFile('xml_files')) throw new Exception("Nenhum ficheiro recebido.");
             $request->validate(['xml_files' => 'required|array']);
             
             $resultados = [];
@@ -50,6 +51,7 @@ class FaturamentoController extends Controller
 
                 $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
 
+                // Capta falhas nas planilhas e evita erros silenciosos
                 if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
                 if ($city->regions->isEmpty()) { $errosDetetive[] = "[{$cidadeDestino} sem Região]"; continue; }
 
@@ -131,14 +133,26 @@ class FaturamentoController extends Controller
                 );
             }
 
+            // Grava os descartes no log do sistema
+            if (!empty($errosDetetive)) {
+                Log::warning("Rentabilidade BWT - Lote parcial. Descartes: " . implode(" | ", array_unique($errosDetetive)));
+            }
+
             if (empty($resultados)) {
-                $motivo = empty($errosDetetive) ? "Nenhum XML válido encontrado." : implode(" | ", array_unique($errosDetetive));
+                $motivo = empty($errosDetetive) ? "Nenhum ficheiro XML válido encontrado." : implode(" | ", array_unique($errosDetetive));
                 throw new Exception($motivo);
             }
 
+            // Responde via JSON para preservar o ecrã
+            if ($request->wantsJson()) {
+                return response()->json(['success' => true]);
+            }
             return redirect()->route('faturamento.index');
 
         } catch (Throwable $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422);
+            }
             return back()->withErrors(['erro_fatal' => 'DETALHE DO ERRO: ' . $e->getMessage()]);
         }
     }

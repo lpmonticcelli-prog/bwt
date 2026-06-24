@@ -3,21 +3,35 @@
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AuditController;
 use App\Http\Controllers\FaturamentoController;
+use App\Models\Faturamento;
+use App\Models\Frete;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
+// Redireciona a raiz direto para o login ou dashboard
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    return redirect()->route('login');
 });
 
+// Rota do Dashboard com a injeção de dados reais
 Route::get('/dashboard', function () {
-    return Inertia::render('Dashboard');
+    $faturamento = [
+        'total_notas' => Faturamento::count(),
+        'receita_total' => Faturamento::sum('receita_real'),
+        'lucro_total' => Faturamento::sum('lucro'),
+    ];
+
+    $auditoria = [
+        'total_notas' => Frete::count(),
+        'custo_cobrado' => Frete::sum('cobrado'),
+        'diferenca_total' => Frete::sum('diferenca'),
+    ];
+
+    return Inertia::render('Dashboard', [
+        'resumoFaturamento' => $faturamento,
+        'resumoAuditoria' => $auditoria
+    ]);
 })->middleware(['auth', 'verified'])->name('dashboard');
 
 Route::middleware('auth')->group(function () {
@@ -32,7 +46,6 @@ require __DIR__.'/auth.php';
 Route::get('/auditoria', [AuditController::class, 'index'])->name('auditoria.index');
 Route::post('/auditoria/processar', [AuditController::class, 'processar'])->name('auditoria.processar');
 
-// Trava de segurança: Se o usuário der F5 na tela de processo, devolve ele pro painel suavemente
 Route::get('/auditoria/processar', function () {
     return redirect()->route('auditoria.index');
 });

@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use App\Models\City;
 use App\Models\Frete;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Throwable;
 use Exception;
@@ -25,7 +26,7 @@ class AuditController extends Controller
             \DB::connection()->getPdo();
 
             if (!$request->hasFile('xml_files')) {
-                throw new Exception("Nenhum arquivo chegou ao PHP. O limite do servidor (php.ini) ainda está bloqueando a carga.");
+                throw new Exception("Nenhum ficheiro recebido.");
             }
 
             $request->validate([
@@ -33,6 +34,7 @@ class AuditController extends Controller
             ]);
 
             $resultados = [];
+            $errosDetetive = [];
 
             foreach ($request->file('xml_files') as $file) {
                 if (strtolower($file->getClientOriginalExtension()) !== 'xml') continue;
@@ -54,10 +56,14 @@ class AuditController extends Controller
                     $q->where('context', 'e4log');
                 }, 'regions.pricingRules'])->first();
 
-                if (!$city || $city->regions->isEmpty()) continue;
+                // Regista as cidades não encontradas para o ficheiro de log
+                if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
+                if ($city->regions->isEmpty()) { $errosDetetive[] = "[{$cidadeDestino} sem Região E4LOG]"; continue; }
 
                 $region = $city->regions->first();
                 $rule = $region->pricingRules->first();
+
+                if (!$rule) { $errosDetetive[] = "[A Região de {$cidadeDestino} está sem preço]"; continue; }
 
                 $taxaFixa = 0;
                 $porcentagem = 0;
@@ -67,7 +73,7 @@ class AuditController extends Controller
                 $taxasExtrasSomadas = 0;
                 $teveTdeOuRural = false;
 
-                // LOGICA PARA CTE NORMAL (0)
+                // LÓGICA PARA CTE NORMAL (0)
                 if ($tipoCTe === '0') {
                     $taxaFixa = (float) $rule->fixed_value;
                     $porcentagem = (float) $rule->excess_percentage / 100;
@@ -99,7 +105,7 @@ class AuditController extends Controller
 
                     $freteTotalFinalCalculado = $freteBaseCalculado + $valorTDECalculado + $taxasExtrasSomadas;
                 } 
-                // LOGICA PARA CTE COMPLEMENTAR (1) OU OUTROS (Reentrega, Devolução)
+                // LÓGICA PARA CTE COMPLEMENTAR (1) OU OUTROS (Reentrega, Devolução)
                 else {
                      $freteTotalFinalCalculado = $valorCobradoE4log; 
                      if (str_contains($observacoesTexto, 'TDE') || str_contains($observacoesTexto, 'RURAL')) {
@@ -117,9 +123,9 @@ class AuditController extends Controller
                 $isCorreto = abs($diferenca) <= 0.50;
 
                 $freteSalvo = Frete::updateOrCreate(
-                    ['arquivo' => $file->getClientOriginalName()], 
+                    ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
                     [
-                        'destino' => $cidadeDestino,
+                        'destino' => Str::limit($cidadeDestino, 150, ''),
                         'valorNF' => $valorNF,
                         'fixoRegra' => $taxaFixa,
                         'percentualRegra' => $rule->excess_percentage,
@@ -132,80 +138,42 @@ class AuditController extends Controller
                         'correto' => $freteTotalFinalCalculado,
                         'diferenca' => round($diferenca, 2),
                         'is_correto' => $isCorreto,
-                        'regra' => $region->name
+                        'regra' => Str::limit($region->name, 100, '')
                     ]
                 );
 
                 $resultados[] = $freteSalvo;
             }
 
-            if (empty($resultados)) {
-                throw new Exception("Nenhuma cidade do XML bateu com o Banco de Dados.");
+            // Grava as cidades descartadas no log silenciosamente
+            if (!empty($errosDetetive)) {
+                Log::warning("Auditoria E4LOG - Lote parcial. Descartes: " . implode(" | ", array_unique($errosDetetive)));
             }
 
+            if (empty($resultados)) {
+                $motivo = empty($errosDetetive) ? "Nenhum ficheiro XML válido encontrado." : implode(" | ", array_unique($errosDetetive));
+                throw new Exception($motivo);
+            }
+
+            // Responde para o Vue de forma silenciosa para não quebrar a fila
+            if ($request->wantsJson()) {
+                return response()->json(['success' => true]);
+            }
             return redirect()->route('auditoria.index');
 
         } catch (Throwable $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422);
+            }
             return back()->withErrors(['erro_fatal' => 'DETALHE DO ERRO: ' . $e->getMessage()]);
         }
     }
 
-    private function getBaseNode($data) {
-        if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte'];
-        if (isset($data['infCte'])) return $data['infCte'];
-        return null;
-    }
-
-    private function extractCity($data) {
-        $base = $this->getBaseNode($data);
-        if ($base && isset($base['dest']['enderDest']['xMun'])) {
-            return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' '));
-        }
-        return null;
-    }
-
-    private function extractInvoiceValue($data) {
-        $base = $this->getBaseNode($data);
-        if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga'];
-        if ($base && isset($base['infCarga']['vCarga'])) return (float) $base['infCarga']['vCarga'];
-        return 0.00;
-    }
-
-    private function extractFreightValue($data) {
-        $base = $this->getBaseNode($data);
-        if ($base && isset($base['vPrest']['vTPrest'])) return (float) $base['vPrest']['vTPrest'];
-        return 0.00;
-    }
-
-    private function extractExtraFees($data) {
-        $base = $this->getBaseNode($data);
-        $fees = [];
-        if ($base && isset($base['vPrest']['Comp'])) {
-            $comps = $base['vPrest']['Comp'];
-            if (isset($comps['xNome'])) $comps = [$comps];
-            foreach ($comps as $comp) {
-                if (isset($comp['xNome']) && isset($comp['vComp'])) {
-                    $nome = strtoupper(trim((string)$comp['xNome']));
-                    $fees[$nome] = (float)$comp['vComp'];
-                }
-            }
-        }
-        return $fees;
-    }
-
-    private function extractObs($data) {
-        $base = $this->getBaseNode($data);
-        if ($base && isset($base['compl']['xObs'])) {
-            return (string) $base['compl']['xObs'];
-        }
-        return '';
-    }
-
-    private function extractTipoCTe($data) {
-        $base = $this->getBaseNode($data);
-        if ($base && isset($base['ide']['tpCTe'])) {
-            return (string) $base['ide']['tpCTe'];
-        }
-        return '0';
-    }
+    private function getBaseNode($data) { if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte']; if (isset($data['infCte'])) return $data['infCte']; return null; }
+    private function extractCity($data) { $base = $this->getBaseNode($data); if ($base && isset($base['dest']['enderDest']['xMun'])) return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')); return null; }
+    private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; if ($base && isset($base['infCarga']['vCarga'])) return (float) $base['infCarga']['vCarga']; return 0.00; }
+    private function extractFreightValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['vPrest']['vTPrest'])) return (float) $base['vPrest']['vTPrest']; return 0.00; }
+    private function extractExtraFees($data) { $base = $this->getBaseNode($data); $fees = []; if ($base && isset($base['vPrest']['Comp'])) { $comps = $base['vPrest']['Comp']; if (isset($comps['xNome'])) $comps = [$comps]; foreach ($comps as $comp) { if (isset($comp['xNome']) && isset($comp['vComp'])) { $nome = strtoupper(trim((string)$comp['xNome'])); $fees[$nome] = (float)$comp['vComp']; } } } return $fees; }
+    private function extractObs($data) { $base = $this->getBaseNode($data); if ($base && isset($base['compl']['xObs'])) return (string) $base['compl']['xObs']; return ''; }
+    private function extractTipoCTe($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; return '0'; }
 }
