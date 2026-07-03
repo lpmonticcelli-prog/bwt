@@ -81,6 +81,8 @@ Route::get('/fechamentos/{id}', [FechamentoController::class, 'show'])->name('fe
 
 // Rotas do nosso Painel de Auditoria E4LOG
 Route::get('/auditoria', [AuditController::class, 'index'])->name('auditoria.index');
+
+// 🚀 A MÁGICA ACONTECE AQUI: Rota Universal de Processamento
 Route::post('/auditoria/processar', [AuditController::class, 'processar'])->name('auditoria.processar');
 
 Route::get('/auditoria/processar', function () {
@@ -89,7 +91,9 @@ Route::get('/auditoria/processar', function () {
 
 // Rotas do nosso Painel de Receita (Sol Fácil)
 Route::get('/faturamento/solfacil', [FaturamentoController::class, 'index'])->name('faturamento.index');
-Route::post('/faturamento/processar', [FaturamentoController::class, 'processar'])->name('faturamento.processar');
+
+// 🚀 A MÁGICA ACONTECE AQUI TAMBÉM: Aponta para o mesmo Cérebro
+Route::post('/faturamento/processar', [AuditController::class, 'processar'])->name('faturamento.processar');
 
 // ROTA ATUALIZADA: Robô de Integração focado apenas no ID do Fechamento selecionado (Performance Bsoft)
 Route::post('/fechamentos/{id}/sincronizar', function (Request $request, $id) {
