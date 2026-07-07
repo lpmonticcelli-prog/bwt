@@ -1,7 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Head, router, Link } from '@inertiajs/vue3';
-import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
 import { Bar, Doughnut } from 'vue-chartjs';
 import { Chart as ChartJS, Title, Tooltip, Legend, BarElement, CategoryScale, LinearScale, ArcElement } from 'chart.js';
 
@@ -61,34 +60,22 @@ const temComplementoE4log = (viagem) => {
 };
 
 const explicarCalculoFrete = (empresa, regra, valorCarga, freteBase, tipoOperacao) => {
-    const fBase = Number(freteBase);
-    const vCarga = Number(valorCarga);
-    const nRegra = regra ? String(regra).replace(/\D/g, '') : '1';
-    
-    let percentual = 0; let minimo = 0;
+    const fBase = Number(freteBase) || 0;
+    const vCarga = Number(valorCarga) || 0;
 
-    if (empresa === 'BWT') {
-        if (nRegra === '1') { percentual = 0.03; minimo = 350; }
-        else if (nRegra === '2') { percentual = 0.04; minimo = 350; }
-        else if (nRegra === '3') { percentual = 0.06; minimo = 550; }
-        else if (nRegra === '4') { percentual = 0.03; minimo = 600; }
-    } else { 
-        if (nRegra === '1') { percentual = 0.02; minimo = 200; }
-        else if (nRegra === '2') { percentual = 0.03; minimo = 250; }
-        else if (nRegra === '3') { percentual = 0.03; minimo = 350; }
-        else if (nRegra === '4') { percentual = 0.04; minimo = 420; }
+    if (tipoOperacao === 'Complemento') {
+        if (fBase === 0) return `Documento complementar exclusivo para taxas/impostos. Sem frete base.`;
+        return `Documento complementar. Valor base aprovado: ${formatMoney(fBase)}.`;
     }
 
-    if (tipoOperacao === 'Complemento' && (!vCarga || vCarga === 0)) {
-        return `Neste serviço de Complemento avulso, o sistema aplicou a regra de Piso Mínimo da Tabela: ${formatMoney(minimo)}.`;
-    }
+    if (vCarga === 0) return `Base de cálculo da mercadoria ausente no XML. Valor fixado pelo sistema: ${formatMoney(fBase)}.`;
 
-    if (!vCarga || vCarga === 0) return `Base de cálculo da mercadoria ausente no XML. Valor fixado pelo sistema: ${formatMoney(fBase)}.`;
+    const percentualReal = (fBase / vCarga) * 100;
 
-    if (Math.abs(fBase - minimo) < 1.5) {
-        return `A regra estipula cobrar ${(percentual * 100).toFixed(0)}% do valor da nota (${formatMoney(vCarga)}). Como o valor ficou abaixo do piso, o sistema aplicou o Piso Mínimo da Tabela: ${formatMoney(minimo)}.`;
+    if (percentualReal >= 1 && percentualReal <= 15) {
+        return `O valor da nota (${formatMoney(vCarga)}) ultrapassou o piso mínimo. A matemática aplicada foi: ${formatMoney(vCarga)} x ${percentualReal.toFixed(2)}% = ${formatMoney(fBase)}.`;
     } else {
-        return `O valor da nota (${formatMoney(vCarga)}) ultrapassou o piso mínimo. O sistema aplicou a regra percentual da tabela: ${formatMoney(vCarga)} x ${(percentual * 100).toFixed(0)}% = ${formatMoney(fBase)}.`;
+        return `O sistema aplicou o Piso Mínimo ou Taxa Fixa da tabela: ${formatMoney(fBase)}. A mercadoria não atingiu o gatilho percentual.`;
     }
 };
 
@@ -153,32 +140,6 @@ const gerarRelatorioDedoDuro = (viagem) => {
     return alertas;
 };
 
-const gerarResumoDidatico = (viagem) => {
-    if(!viagem) return "";
-    const receita = Number(viagem.receita) || 0;
-    const custo = Number(viagem.custo) || 0;
-    const lucro = Number(viagem.lucro) || 0;
-    
-    let texto = "";
-    if (lucro > 0) {
-        texto = `✅ A conta fechou com lucro! Nós cobramos ${formatMoney(receita)} do nosso cliente (Sol Fácil) e repassamos ${formatMoney(custo)} para o parceiro (E4LOG). O lucro limpo nesta viagem foi de ${formatMoney(lucro)}.`;
-    } else if (lucro < 0) {
-        texto = `❌ Tivemos Prejuízo! Nós recebemos ${formatMoney(receita)} do cliente, mas a E4LOG nos cobrou ${formatMoney(custo)}. Tivemos que tirar ${formatMoney(Math.abs(lucro))} do nosso próprio bolso. `;
-        if (receita === 0) texto += "O maior motivo desse prejuízo é que nós NÃO EMITIMOS a fatura para a Sol Fácil ainda.";
-        else if (custo > receita) texto += "Isto aconteceu porque a transportadora nos cobrou mais caro pelas entregas do que o preço que vendemos.";
-    } else {
-        texto = `⚠️ Ficamos no zero a zero (Elas por elas). O valor que recebemos da Sol Fácil foi exatamente igual ao que pagamos para a E4LOG.`;
-    }
-    
-    const e4logCobrouExtra = viagem.e4log_detalhes && viagem.e4log_detalhes.some(f => Number(f.tdeCalculado) > 0 || Number(f.taxasExtras) > 0 || f.tipo_operacao === 'Complemento');
-    const bwtCobrouExtra = viagem.bwt_detalhes && viagem.bwt_detalhes.some(f => Number(f.receita_tde) > 0 || f.tipo_operacao === 'Complemento');
-    
-    if (e4logCobrouExtra && !bwtCobrouExtra) {
-        texto += " 🔎 DICA DE OURO: A E4LOG nos cobrou TDE / Taxas Extras, mas NÓS ESQUECEMOS de cobrar a TDE da Sol Fácil! Emita um CT-e complementar agora para recuperar esse dinheiro.";
-    }
-    return texto;
-};
-
 const obterReceitaAssociada = (frete) => {
     const viagem = props.cruzamentoViagens.find(v => v.e4log_detalhes.some(e => e.id === frete.id));
     return viagem ? viagem.receita : 0;
@@ -196,9 +157,6 @@ const fechamentoAtual = computed(() => filtroSelecionado.value ? props.fechament
 const lucroPresumido = computed(() => (props.resumoFaturamento.receita_teorica || 0) - (props.resumoAuditoria.custo_correto || 0));
 const gapLucro = computed(() => lucroPresumido.value - (props.resumoFaturamento.lucro_total || 0));
 const margemLiquida = computed(() => props.resumoFaturamento.receita_total === 0 ? 0 : ((props.resumoFaturamento.lucro_total / props.resumoFaturamento.receita_total) * 100).toFixed(1));
-const ticketMedio = computed(() => props.resumoFaturamento.total_notas === 0 ? 0 : props.resumoFaturamento.receita_total / props.resumoFaturamento.total_notas);
-const custoMedio = computed(() => props.resumoAuditoria.total_notas === 0 ? 0 : props.resumoAuditoria.custo_cobrado / props.resumoAuditoria.total_notas);
-const taxaGlosa = computed(() => props.resumoAuditoria.custo_cobrado === 0 ? 0 : ((props.resumoAuditoria.diferenca_total / props.resumoAuditoria.custo_cobrado) * 100).toFixed(1));
 
 // ==============================================================================
 // GESTÃO DE ESTADO DOS MODAIS E OVERLAYS
@@ -240,7 +198,7 @@ onMounted(() => window.addEventListener('keydown', handleKeydown));
 onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
 
 // ==============================================================================
-// ALGORITMO DE AUDITORIA PERFEITA ("NÍVEL GOD") - PREVINE DUPLA CONTAGEM
+// ALGORITMO DE AUDITORIA PERFEITA ("NÍVEL GOD") - FUSÃO ESTRATÉGICA
 // ==============================================================================
 const totaisMatch = computed(() => {
     let lucro = 0; let prejuizo = 0;
@@ -252,34 +210,32 @@ const totaisMatch = computed(() => {
     return { lucro, prejuizo };
 });
 
-const getTotaisUnicos = (fretesArray) => {
-    const viagensUnicas = new Map();
-    fretesArray.forEach(f => {
-        const viagem = props.cruzamentoViagens.find(v => v.e4log_detalhes.some(e => e.id === f.id));
-        if (viagem) {
-            viagensUnicas.set(viagem.id, Number(viagem.lucro) || 0); // O Mapa sobrescreve IDs repetidos, anulando duplicações
-        } else {
-            viagensUnicas.set('frete_' + f.id, 0 - Number(f.cobrado));
-        }
-    });
-    let lucro = 0; let prejuizo = 0;
-    viagensUnicas.forEach((valorLucro) => {
-        if (valorLucro > 0) lucro += valorLucro;
-        else if (valorLucro < 0) prejuizo += Math.abs(valorLucro);
-    });
-    return { lucro, prejuizo };
-};
-
 const fretesDivergentes = computed(() => props.fretesDetalhados.filter(f => !f.is_correto));
 const fretesCorretos = computed(() => props.fretesDetalhados.filter(f => f.is_correto));
 
-const totaisDivergentes = computed(() => getTotaisUnicos(fretesDivergentes.value));
-const totaisCorretos = computed(() => getTotaisUnicos(fretesCorretos.value));
+const totaisDivergentes = computed(() => {
+    let glosa = 0; let ganho = 0;
+    fretesDivergentes.value.forEach(f => {
+        const dif = Number(f.diferenca) || 0;
+        if (dif > 0) glosa += dif;
+        else if (dif < 0) ganho += Math.abs(dif);
+    });
+    return { glosa, ganho };
+});
+
+const totaisCorretos = computed(() => {
+    let liberado = 0;
+    fretesCorretos.value.forEach(f => {
+        liberado += Number(f.cobrado) || 0;
+    });
+    return { liberado };
+});
 
 const abaExpandida = ref('match'); 
 const alternarAba = (aba) => { abaExpandida.value = abaExpandida.value === aba ? null : aba; };
 
 const descobrirMotivo = (frete) => {
+    if (frete.is_correto) return 'Cobrança exata em tabela comercial';
     if (frete.regra === '⚠️ CIDADE NÃO MAPEADA') return 'Cidade não existe no cadastro de Regiões.';
     
     const dif = Number(frete.diferenca) || 0;
@@ -309,171 +265,193 @@ const faturamentoChartData = computed(() => ({ labels: ['Receita Real', 'Receita
 const auditoriaChartData = computed(() => ({ labels: ['Cobrado E4LOG', 'Custo Correto', 'Divergência'], datasets: [{ backgroundColor: ['#f97316', '#cbd5e1', '#ef4444'], borderWidth: 0, hoverOffset: 4, data: [props.resumoAuditoria.custo_cobrado, props.resumoAuditoria.custo_correto, props.resumoAuditoria.diferenca_total] }] }));
 const barOptions = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e293b', padding: 12, cornerRadius: 8, titleFont: { size: 13 } } }, scales: { y: { border: { display: false }, grid: { color: '#f1f5f9', drawBorder: false } }, x: { border: { display: false }, grid: { display: false } } } };
 const doughnutOptions = { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20, font: { family: "'Inter', sans-serif", size: 12 } } }, tooltip: { backgroundColor: '#1e293b', padding: 12, cornerRadius: 8 } } };
-const irParaRentabilidade = () => router.visit('/faturamento/solfacil');
-const irParaAuditoria = () => router.visit('/auditoria');
+
+// Controle do Menu Mobile
+const sidebarOpen = ref(false);
+const toggleSidebar = () => { sidebarOpen.value = !sidebarOpen.value; };
 </script>
 
 <template>
     <Head title="Painel de Controle - BWT Logística" />
 
-    <AuthenticatedLayout>
+    <div class="flex h-screen bg-slate-50 font-sans selection:bg-blue-500 selection:text-white overflow-hidden">
         
-        <template #header>
-            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-5 w-full">
-                <div class="flex items-center gap-4">
-                    <img src="/images/logo.png" alt="BWT Logística" class="h-9 object-contain hidden sm:block drop-shadow-sm" onerror="this.outerHTML='<span class=\'text-2xl font-black text-slate-900 tracking-tight\'>BWT</span>'" />
-                    <div class="h-10 w-px bg-slate-200 hidden sm:block"></div>
-                    <div>
-                        <h2 class="font-bold text-xl text-slate-900 leading-tight tracking-tight">Painel de Controle</h2>
-                        <p class="text-[11px] font-bold text-blue-600 uppercase tracking-[0.2em] mt-0.5 opacity-80">Torre de Auditoria</p>
+        <aside :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'" class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 shadow-2xl transition-transform duration-300 md:translate-x-0 md:static md:flex md:flex-col overflow-y-auto">
+            <div class="flex items-center justify-center h-20 border-b border-slate-800">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center text-white font-black text-xl shadow-[0_0_15px_rgba(59,130,246,0.5)]">B</div>
+                    <span class="text-xl font-black text-white tracking-tight">BWT <span class="text-blue-400 font-light">Auditor</span></span>
+                </div>
+            </div>
+
+            <div class="flex-1 px-4 py-6 space-y-8">
+                <div>
+                    <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Visão Geral</p>
+                    <Link href="/dashboard" class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-blue-600 text-white shadow-[0_4px_12px_rgba(37,99,235,0.4)] transition-all">
+                        <svg class="w-5 h-5 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                        <span class="text-sm font-semibold">Dashboard</span>
+                    </Link>
+                </div>
+
+                <div>
+                    <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Auditoria & Operação</p>
+                    <div class="space-y-1">
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors group">
+                            <svg class="w-5 h-5 text-slate-500 group-hover:text-amber-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+                            <span class="text-sm font-medium">Auditoria E4LOG</span>
+                        </Link>
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors group">
+                            <svg class="w-5 h-5 text-slate-500 group-hover:text-blue-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            <span class="text-sm font-medium">Faturamento Sol Fácil</span>
+                        </Link>
+                        <Link href="/fechamentos" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors group">
+                            <svg class="w-5 h-5 text-slate-500 group-hover:text-emerald-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                            <span class="text-sm font-medium">Lançamentos (Upload)</span>
+                        </Link>
                     </div>
                 </div>
-                
-                <div class="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
-                    <div class="flex items-center gap-3 w-full sm:w-auto bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden sm:block pt-0.5">Competência:</span>
-                        <select v-model="filtroSelecionado" @change="aplicarFiltro" class="bg-transparent border-none text-slate-800 text-sm font-semibold focus:ring-0 w-full sm:w-64 p-0 cursor-pointer outline-none">
+
+                <div>
+                    <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3 flex items-center gap-2">Módulos PRO <span class="bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded text-[8px]">NOVO</span></p>
+                    <div class="space-y-1">
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group opacity-70 hover:opacity-100">
+                            <span class="text-lg">⏱️</span> <span class="text-sm font-medium">Simulador de Contratos</span>
+                        </Link>
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group opacity-70 hover:opacity-100">
+                            <span class="text-lg">⏳</span> <span class="text-sm font-medium">Auditoria de SLA (Atrasos)</span>
+                        </Link>
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group opacity-70 hover:opacity-100">
+                            <span class="text-lg">📱</span> <span class="text-sm font-medium">Robô de Alertas (WPP)</span>
+                        </Link>
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group opacity-70 hover:opacity-100">
+                            <span class="text-lg">🤝</span> <span class="text-sm font-medium">Portal do Parceiro (E4LOG)</span>
+                        </Link>
+                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group opacity-70 hover:opacity-100">
+                            <span class="text-lg">🏦</span> <span class="text-sm font-medium">Conciliação Bancária</span>
+                        </Link>
+                    </div>
+                </div>
+
+            </div>
+            
+            <div class="p-4 border-t border-slate-800">
+                <div class="flex items-center gap-3 px-3 py-2">
+                    <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-white font-bold text-xs">DI</div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-white truncate">Diretoria BWT</p>
+                        <p class="text-[10px] text-slate-500 truncate">diretoria@bwt.com.br</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
+            
+            <header class="bg-white border-b border-slate-200 shadow-sm z-30 h-20 flex-shrink-0 flex items-center justify-between px-4 sm:px-8">
+                <div class="flex items-center gap-4">
+                    <button @click="toggleSidebar" class="md:hidden text-slate-500 hover:text-slate-700 focus:outline-none">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    </button>
+                    <div>
+                        <h1 class="text-xl font-black text-slate-900 tracking-tight">Painel Executivo</h1>
+                        <p class="text-[11px] font-bold text-slate-500 uppercase tracking-widest hidden sm:block">Centro de Inteligência Logística</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4 sm:gap-6">
+                    <div class="hidden sm:flex items-center gap-3 bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+                        <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                        <select v-model="filtroSelecionado" @change="aplicarFiltro" class="bg-transparent border-none text-slate-700 text-sm font-bold focus:ring-0 p-0 cursor-pointer outline-none w-48">
                             <option value="">Visão Global (Consolidado)</option>
                             <option v-for="f in fechamentos" :key="f.id" :value="f.id">{{ f.titulo }}</option>
                         </select>
                     </div>
-                    
-                    <Link href="/fechamentos" class="group bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-sm font-bold py-2.5 px-5 rounded-xl shadow-[0_4px_14px_0_rgb(37,99,235,0.39)] transition-all flex items-center justify-center min-w-[140px]">
-                        <svg class="w-4 h-4 mr-2 hidden sm:block opacity-70 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                        Lançamentos
-                    </Link>
-                </div>
-            </div>
-        </template>
 
-        <div class="py-10 bg-[#f8fafc] min-h-screen relative font-sans selection:bg-blue-500 selection:text-white">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div class="h-6 w-px bg-slate-200 hidden sm:block"></div>
+
+                    <button class="relative p-2 text-slate-400 hover:text-slate-600 transition-colors">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                        <span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                    </button>
+                </div>
+            </header>
+
+            <main class="flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-8">
                 
-                <div v-if="fechamentoAtual" class="mb-12 animate-fade-in">
-                    <div class="bg-slate-900 rounded-[24px] shadow-xl p-8 lg:p-10 relative overflow-hidden">
-                        <div class="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900"></div>
-                        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(#ffffff 1px, transparent 1px); background-size: 32px 32px;"></div>
-                        <div class="absolute -top-24 -right-24 w-96 h-96 bg-blue-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-40 pointer-events-none"></div>
-
-                        <div class="relative z-10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 mb-10 border-b border-slate-700/50 pb-8">
-                            <div>
-                                <span class="inline-flex items-center gap-1.5 text-blue-400 font-bold text-[10px] uppercase tracking-[0.2em] mb-3 px-2 py-1 bg-blue-500/10 rounded border border-blue-500/20">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
-                                    Consolidado Técnico
-                                </span>
-                                <h3 class="text-3xl sm:text-4xl font-black text-white tracking-tight">{{ fechamentoAtual.titulo }}</h3>
-                                <p class="text-slate-400 mt-2 text-sm font-medium">Janela Operacional: <span class="text-slate-300">{{ formatarData(fechamentoAtual.data_inicio) }}</span> até <span class="text-slate-300">{{ formatarData(fechamentoAtual.data_fim) }}</span></p>
-                            </div>
-                            <div class="bg-slate-800/80 backdrop-blur-sm border border-slate-700 rounded-2xl p-5 text-right min-w-[240px] shadow-inner">
-                                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center justify-end gap-1.5">
-                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                    Previsão de Liquidação
-                                </p>
-                                <p class="text-2xl font-black text-emerald-400">{{ formatarData(fechamentoAtual.data_vencimento) }}</p>
-                            </div>
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-5 mb-10">
+                    
+                    <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow relative overflow-hidden group">
+                        <div class="absolute right-0 top-0 w-16 h-16 bg-blue-500/5 rounded-bl-[100px] -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg shadow-inner">🚛</div>
+                            <span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-emerald-50 text-emerald-600 border border-emerald-100">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg> 12%
+                            </span>
                         </div>
-
-                        <div class="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 mb-10 bg-slate-950/30 backdrop-blur-md p-6 lg:p-8 rounded-2xl border border-slate-700/50">
-                            
-                            <div class="lg:col-span-7">
-                                <h4 class="text-[11px] font-black text-blue-400 uppercase tracking-[0.15em] mb-5 flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                                    Fluxo de Caixa: Faturamento Sol Fácil
-                                </h4>
-                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-y-6 gap-x-4 items-center">
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Receita Real</p>
-                                        <p class="text-xl font-black text-white mt-1">{{ formatMoney(resumoFaturamento.receita_total) }}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Receita Presumida</p>
-                                        <p class="text-xl font-black text-slate-300 mt-1">{{ formatMoney(resumoFaturamento.receita_teorica) }}</p>
-                                    </div>
-                                    <div @click="abrirKpiModal('gap')" class="cursor-pointer group rounded-lg p-2 -ml-2 transition hover:bg-white/5 border border-transparent hover:border-white/10">
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider group-hover:text-amber-400 transition-colors flex items-center gap-1">Gap de Receita <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg></p>
-                                        <p class="text-xl font-black text-amber-400 mt-1">{{ formatMoney(resumoFaturamento.receita_teorica - resumoFaturamento.receita_total) }}</p>
-                                    </div>
-
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Lucro Real Líquido</p>
-                                        <p class="text-xl font-black text-emerald-400 mt-1">{{ formatMoney(resumoFaturamento.lucro_total) }}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Lucro Presumido</p>
-                                        <p class="text-xl font-black text-blue-400 mt-1">{{ formatMoney(lucroPresumido) }}</p>
-                                    </div>
-                                    <div @click="abrirKpiModal('fuga')" class="cursor-pointer group rounded-lg p-2 -ml-2 transition hover:bg-white/5 border border-transparent hover:border-white/10">
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider group-hover:text-red-400 transition-colors flex items-center gap-1">Fuga de Lucro <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg></p>
-                                        <p class="text-xl font-black text-red-400 mt-1">{{ formatMoney(gapLucro) }}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="lg:col-span-5 lg:border-l lg:border-slate-700/50 lg:pl-8 pt-8 lg:pt-0 border-t border-slate-700/50 lg:border-t-0">
-                                <h4 class="text-[11px] font-black text-amber-500 uppercase tracking-[0.15em] mb-5 flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                                    Controle de Gastos: Fatura E4LOG
-                                </h4>
-                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-4">
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Custo Real Cobrado</p>
-                                        <p class="text-xl font-black text-white mt-1">{{ formatMoney(resumoAuditoria.custo_cobrado) }}</p>
-                                    </div>
-                                    <div>
-                                        <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Custo Presumido</p>
-                                        <p class="text-xl font-black text-slate-300 mt-1">{{ formatMoney(resumoAuditoria.custo_correto) }}</p>
-                                    </div>
-                                    <div @click="abrirKpiModal('divergencia')" class="sm:col-span-2 mt-2 p-4 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-between cursor-pointer group hover:bg-red-500/20 hover:border-red-500/40 transition-all duration-300">
-                                        <div>
-                                            <p class="text-red-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5">
-                                                Divergência Operacional Detectada
-                                                <svg class="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-                                            </p>
-                                            <p class="text-2xl font-black text-red-400 mt-0.5">{{ formatMoney(resumoAuditoria.diferenca_total) }}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="relative z-10 grid grid-cols-2 lg:grid-cols-4 gap-6 text-sm divide-x divide-slate-700/50 border-t border-slate-700/50 pt-8 mt-2">
-                            <div class="pl-0 lg:pl-0">
-                                <p class="text-slate-500 text-[10px] font-bold uppercase tracking-[0.1em] mb-1.5 flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg> Margem Líquida Real</p>
-                                <h4 class="text-2xl font-black mt-1" :class="margemLiquida >= 20 ? 'text-emerald-400' : 'text-amber-400'">{{ margemLiquida }}%</h4>
-                            </div>
-                            <div class="pl-6">
-                                <p class="text-slate-500 text-[10px] font-bold uppercase tracking-[0.1em] mb-1.5 flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg> Média Faturada / Frete</p>
-                                <h4 class="text-2xl font-black text-white mt-1">{{ formatMoney(ticketMedio) }}</h4>
-                            </div>
-                            <div class="pl-6">
-                                <p class="text-slate-500 text-[10px] font-bold uppercase tracking-[0.1em] mb-1.5 flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"></path></svg> Média Custo / Frete</p>
-                                <h4 class="text-2xl font-black text-slate-300 mt-1">{{ formatMoney(custoMedio) }}</h4>
-                            </div>
-                            <div class="pl-6">
-                                <p class="text-slate-500 text-[10px] font-bold uppercase tracking-[0.1em] mb-1.5 flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg> Taxa de Glosa E4LOG</p>
-                                <h4 class="text-2xl font-black text-red-400 mt-1">{{ taxaGlosa }}%</h4>
-                            </div>
+                        <div>
+                            <p class="text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Total de Viagens</p>
+                            <h3 class="text-3xl font-black text-slate-800 tracking-tight">{{ cruzamentoViagens.length }} <span class="text-sm font-medium text-slate-400 tracking-normal">CT-es Casados</span></h3>
                         </div>
                     </div>
+
+                    <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow relative overflow-hidden group">
+                        <div class="absolute right-0 top-0 w-16 h-16 bg-emerald-500/5 rounded-bl-[100px] -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-lg shadow-inner">📈</div>
+                            <span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-emerald-50 text-emerald-600 border border-emerald-100">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg> 5%
+                            </span>
+                        </div>
+                        <div>
+                            <p class="text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Faturado Sol Fácil</p>
+                            <h3 class="text-2xl font-black text-slate-800 tracking-tight truncate" :title="formatMoney(resumoFaturamento.receita_total)">{{ formatMoney(resumoFaturamento.receita_total) }}</h3>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow relative overflow-hidden group">
+                        <div class="absolute right-0 top-0 w-16 h-16 bg-orange-500/5 rounded-bl-[100px] -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-lg shadow-inner">📉</div>
+                            <span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"></path></svg> 0%
+                            </span>
+                        </div>
+                        <div>
+                            <p class="text-[11px] font-black text-slate-400 uppercase tracking-wider mb-1">Liberado p/ Pagto (E4LOG)</p>
+                            <h3 class="text-2xl font-black text-slate-800 tracking-tight truncate" :title="formatMoney(totaisCorretos.liberado)">{{ formatMoney(totaisCorretos.liberado) }}</h3>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-md transition-shadow relative overflow-hidden group">
+                        <div class="absolute right-0 top-0 w-16 h-16 bg-purple-500/5 rounded-bl-[100px] -mr-4 -mt-4 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center text-lg shadow-inner">🛡️</div>
+                            <span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-emerald-50 text-emerald-600 border border-emerald-100" title="Menos erros da transportadora este mês">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg> 2%
+                            </span>
+                        </div>
+                        <div>
+                            <p class="text-[11px] font-black text-purple-500 uppercase tracking-wider mb-1">Glosas Intercetadas</p>
+                            <h3 class="text-2xl font-black text-slate-800 tracking-tight truncate" :title="formatMoney(totaisDivergentes.glosa)">{{ formatMoney(totaisDivergentes.glosa) }}</h3>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-900 rounded-2xl p-5 border border-slate-800 shadow-xl hover:shadow-2xl transition-shadow relative overflow-hidden group">
+                        <div class="absolute right-0 top-0 w-24 h-24 bg-blue-500/20 rounded-bl-[100px] -mr-8 -mt-8 transition-transform group-hover:scale-110"></div>
+                        <div class="flex justify-between items-start mb-4 relative z-10">
+                            <div class="w-10 h-10 rounded-xl bg-white/10 text-white flex items-center justify-center text-lg backdrop-blur-sm border border-white/5">💎</div>
+                            <span class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded bg-blue-500 text-white border border-blue-400 shadow-sm">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg> 8%
+                            </span>
+                        </div>
+                        <div class="relative z-10">
+                            <p class="text-[11px] font-black text-blue-400 uppercase tracking-wider mb-1">EBITDA Real Líquido</p>
+                            <h3 class="text-2xl font-black text-white tracking-tight truncate" :title="formatMoney(totaisMatch.lucro - totaisMatch.prejuizo)">{{ formatMoney(totaisMatch.lucro - totaisMatch.prejuizo) }}</h3>
+                        </div>
+                    </div>
+
                 </div>
-
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
-                    <div class="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-6 sm:p-8 cursor-pointer group hover:shadow-lg hover:border-blue-200 transition-all duration-300">
-                        <div class="flex justify-between items-center mb-8">
-                            <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider">Performance de Receita</h4>
-                        </div>
-                        <div class="h-64"><Bar :data="faturamentoChartData" :options="barOptions" /></div>
-                    </div>
-                    <div class="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-6 sm:p-8 cursor-pointer group hover:shadow-lg hover:border-blue-200 transition-all duration-300">
-                        <div class="flex justify-between items-center mb-8">
-                            <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider">Composição de Custos e Fugas</h4>
-                        </div>
-                        <div class="h-64 relative flex items-center justify-center"><Doughnut :data="auditoriaChartData" :options="doughnutOptions" /></div>
-                    </div>
-                </div>
-
-                <!-- TABS NAVEGAÇÃO COM MICRO CARDS (BADGES) DE RENTABILIDADE -->
-                <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-5">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
                     <button @click="alternarAba('match')" class="group relative flex justify-between items-start sm:items-center bg-white rounded-2xl p-5 shadow-[0_2px_12px_rgba(0,0,0,0.03)] border transition-all duration-300 active:scale-[0.99] flex-col sm:flex-row gap-4" :class="abaExpandida === 'match' ? 'border-indigo-400 ring-2 ring-indigo-400/20 bg-indigo-50/30' : 'border-slate-200 hover:border-slate-300 hover:shadow-md'">
                         <div class="flex items-center gap-4 w-full sm:w-auto">
                             <div class="bg-indigo-50 text-indigo-500 p-3 rounded-xl transition-colors group-hover:bg-indigo-100 shrink-0">
@@ -511,13 +489,13 @@ const irParaAuditoria = () => router.visit('/auditoria');
                         </div>
                         <div class="flex items-center gap-3 w-full sm:w-auto justify-end">
                             <div class="flex flex-col items-end gap-1.5">
-                                <div class="flex justify-between items-center bg-emerald-50 border border-emerald-100 rounded-md px-1.5 py-0.5 min-w-[110px]">
-                                    <span class="text-[8px] font-black text-emerald-600 uppercase tracking-widest">Lucro</span>
-                                    <span class="text-[9px] font-black text-emerald-700">{{ formatMoney(totaisDivergentes.lucro) }}</span>
-                                </div>
                                 <div class="flex justify-between items-center bg-rose-50 border border-rose-100 rounded-md px-1.5 py-0.5 min-w-[110px]">
-                                    <span class="text-[8px] font-black text-rose-600 uppercase tracking-widest">Prejuízo</span>
-                                    <span class="text-[9px] font-black text-rose-700">{{ formatMoney(totaisDivergentes.prejuizo) }}</span>
+                                    <span class="text-[8px] font-black text-rose-600 uppercase tracking-widest">Glosa (Risco)</span>
+                                    <span class="text-[9px] font-black text-rose-700">{{ formatMoney(totaisDivergentes.glosa) }}</span>
+                                </div>
+                                <div class="flex justify-between items-center bg-amber-50 border border-amber-100 rounded-md px-1.5 py-0.5 min-w-[110px]">
+                                    <span class="text-[8px] font-black text-amber-600 uppercase tracking-widest">Ganho Extra</span>
+                                    <span class="text-[9px] font-black text-amber-700">{{ formatMoney(totaisDivergentes.ganho) }}</span>
                                 </div>
                             </div>
                             <svg class="w-5 h-5 text-slate-400 transition-transform duration-300 hidden sm:block" :class="abaExpandida === 'divergentes' ? 'rotate-180 text-red-500' : 'group-hover:text-slate-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -536,13 +514,9 @@ const irParaAuditoria = () => router.visit('/auditoria');
                         </div>
                         <div class="flex items-center gap-3 w-full sm:w-auto justify-end">
                             <div class="flex flex-col items-end gap-1.5">
-                                <div class="flex justify-between items-center bg-emerald-50 border border-emerald-100 rounded-md px-1.5 py-0.5 min-w-[110px]">
-                                    <span class="text-[8px] font-black text-emerald-600 uppercase tracking-widest">Lucro</span>
-                                    <span class="text-[9px] font-black text-emerald-700">{{ formatMoney(totaisCorretos.lucro) }}</span>
-                                </div>
-                                <div class="flex justify-between items-center bg-rose-50 border border-rose-100 rounded-md px-1.5 py-0.5 min-w-[110px]">
-                                    <span class="text-[8px] font-black text-rose-600 uppercase tracking-widest">Prejuízo</span>
-                                    <span class="text-[9px] font-black text-rose-700">{{ formatMoney(totaisCorretos.prejuizo) }}</span>
+                                <div class="flex justify-between items-center bg-emerald-50 border border-emerald-100 rounded-md px-1.5 py-1 min-w-[140px]">
+                                    <span class="text-[8px] font-black text-emerald-600 uppercase tracking-widest">Lote Aprovado</span>
+                                    <span class="text-[10px] font-black text-emerald-700">{{ formatMoney(totaisCorretos.liberado) }}</span>
                                 </div>
                             </div>
                             <svg class="w-5 h-5 text-slate-400 transition-transform duration-300 hidden sm:block" :class="abaExpandida === 'corretos' ? 'rotate-180 text-emerald-500' : 'group-hover:text-slate-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
@@ -550,8 +524,7 @@ const irParaAuditoria = () => router.visit('/auditoria');
                     </button>
                 </div>
 
-                <!-- CONTEÚDO DAS ABAS -->
-                <div v-if="abaExpandida === 'match'" class="mt-5 bg-white rounded-2xl shadow-[0_2px_20px_rgba(0,0,0,0.04)] border border-slate-200 overflow-hidden animate-fade-in">
+                <div v-if="abaExpandida === 'match'" class="bg-white rounded-2xl shadow-[0_2px_20px_rgba(0,0,0,0.04)] border border-slate-200 overflow-hidden animate-fade-in mb-8">
                     <div class="overflow-x-auto max-h-[600px] scrollbar-thin scrollbar-thumb-slate-200">
                         <table class="w-full text-left text-sm border-collapse whitespace-nowrap">
                             <thead class="bg-slate-50/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10">
@@ -605,7 +578,7 @@ const irParaAuditoria = () => router.visit('/auditoria');
                     </div>
                 </div>
 
-                <div v-if="abaExpandida === 'divergentes' || abaExpandida === 'corretos'" class="mt-5 bg-white rounded-2xl shadow-[0_2px_20px_rgba(0,0,0,0.04)] border border-slate-200 overflow-hidden animate-fade-in">
+                <div v-if="abaExpandida === 'divergentes' || abaExpandida === 'corretos'" class="bg-white rounded-2xl shadow-[0_2px_20px_rgba(0,0,0,0.04)] border border-slate-200 overflow-hidden animate-fade-in mb-8">
                     <div class="overflow-x-auto max-h-[500px] scrollbar-thin scrollbar-thumb-slate-200">
                         <table class="w-full text-left text-sm border-collapse whitespace-nowrap">
                             <thead class="bg-slate-50/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10">
@@ -651,12 +624,24 @@ const irParaAuditoria = () => router.visit('/auditoria');
                     </div>
                 </div>
 
-            </div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
+                    <div class="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-6 sm:p-8 cursor-pointer group hover:shadow-lg hover:border-blue-200 transition-all duration-300">
+                        <div class="flex justify-between items-center mb-8">
+                            <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider">Performance de Receita</h4>
+                        </div>
+                        <div class="h-64"><Bar :data="faturamentoChartData" :options="barOptions" /></div>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-100 shadow-[0_2px_12px_rgba(0,0,0,0.03)] p-6 sm:p-8 cursor-pointer group hover:shadow-lg hover:border-blue-200 transition-all duration-300">
+                        <div class="flex justify-between items-center mb-8">
+                            <h4 class="text-sm font-black text-slate-800 uppercase tracking-wider">Composição de Custos e Fugas</h4>
+                        </div>
+                        <div class="h-64 relative flex items-center justify-center"><Doughnut :data="auditoriaChartData" :options="doughnutOptions" /></div>
+                    </div>
+                </div>
+
+            </main>
         </div>
 
-        <!-- ========================================================================================= -->
-        <!-- MODAIS KPI EXCLUSIVOS (FUGA DE LUCRO, GAP DE RECEITA, DIVERGÊNCIAS OPERACIONAIS)          -->
-        <!-- ========================================================================================= -->
         <transition name="modal-overlay">
             <div v-if="kpiModalAberto" class="fixed inset-0 z-[90] flex items-center justify-center p-4 sm:p-6" style="font-family: 'Inter', sans-serif;">
                 <div class="absolute inset-0 bg-slate-900/80 backdrop-blur-sm transition-opacity" @click.self="fecharTudo"></div>
@@ -683,7 +668,6 @@ const irParaAuditoria = () => router.visit('/auditoria');
 
                     <div class="overflow-y-auto scrollbar-thin scrollbar-thumb-slate-300 p-6 bg-slate-50/50 flex-1">
                         
-                        <!-- TABELA FUGA DE LUCRO -->
                         <table v-if="kpiModalAberto === 'fuga'" class="w-full text-left text-sm border-collapse whitespace-nowrap bg-white rounded-xl shadow-sm border border-slate-200">
                             <thead class="bg-red-50 border-b border-red-100">
                                 <tr>
@@ -705,7 +689,6 @@ const irParaAuditoria = () => router.visit('/auditoria');
                             </tbody>
                         </table>
 
-                        <!-- TABELA GAP DE RECEITA -->
                         <table v-if="kpiModalAberto === 'gap'" class="w-full text-left text-sm border-collapse whitespace-nowrap bg-white rounded-xl shadow-sm border border-slate-200">
                             <thead class="bg-amber-50 border-b border-amber-100">
                                 <tr>
@@ -727,7 +710,6 @@ const irParaAuditoria = () => router.visit('/auditoria');
                             </tbody>
                         </table>
 
-                        <!-- TABELA DIVERGÊNCIAS E4LOG -->
                         <table v-if="kpiModalAberto === 'divergencia'" class="w-full text-left text-sm border-collapse whitespace-nowrap bg-white rounded-xl shadow-sm border border-slate-200">
                             <thead class="bg-red-50 border-b border-red-100">
                                 <tr>
@@ -754,9 +736,6 @@ const irParaAuditoria = () => router.visit('/auditoria');
             </div>
         </transition>
 
-        <!-- ========================================================================================= -->
-        <!-- O SUPER MODAL DE "EXTRATO DACTE DA VIAGEM" OVERLAY FULL SCREEN                            -->
-        <!-- ========================================================================================= -->
         <transition name="modal-overlay">
             <div v-if="dossieViagemSelecionado" class="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6" style="font-family: 'Inter', sans-serif;">
                 
@@ -857,9 +836,9 @@ const irParaAuditoria = () => router.visit('/auditoria');
                                                     <li class="flex justify-between items-start">
                                                         <div>
                                                             <span class="block">1. Frete Base</span>
-                                                            <span class="block text-[9px] font-bold text-blue-500 mt-0.5">{{ explicarCalculoFrete('BWT', fat.regra, fat.valor_carga, fat.receita_frete_base, fat.tipo_operacao) }}</span>
+                                                            <span class="block text-[9px] font-bold text-blue-500 mt-0.5">{{ explicarCalculoFrete('BWT', fat.regra, fat.valor_carga, fat.tipo_operacao === 'Complemento' ? 0 : fat.receita_frete_base, fat.tipo_operacao) }}</span>
                                                         </div>
-                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(fat.receita_frete_base)}}</span>
+                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(fat.tipo_operacao === 'Complemento' ? 0 : fat.receita_frete_base)}}</span>
                                                     </li>
                                                     <li class="flex justify-between items-center" v-if="fat.receita_tde > 0">
                                                         <span>2. TDE (Taxa de Dificuldade) Cobrada</span>
@@ -956,13 +935,13 @@ const irParaAuditoria = () => router.visit('/auditoria');
                                                     <li class="flex justify-between items-start">
                                                         <div>
                                                             <span class="block">1. Frete Base da Tabela</span>
-                                                            <span class="block text-[9px] font-bold text-orange-500 mt-0.5">{{ explicarCalculoFrete('E4LOG', frete.regra, frete.valorNF, frete.freteBaseCalculado, frete.tipo_operacao) }}</span>
+                                                            <span class="block text-[9px] font-bold text-orange-500 mt-0.5">{{ explicarCalculoFrete('E4LOG', frete.regra, frete.valorNF, frete.tipo_operacao === 'Complemento' ? 0 : frete.freteBaseCalculado, frete.tipo_operacao) }}</span>
                                                         </div>
-                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(frete.freteBaseCalculado)}}</span>
+                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(frete.tipo_operacao === 'Complemento' ? 0 : frete.freteBaseCalculado)}}</span>
                                                     </li>
                                                     <li class="flex justify-between items-center">
-                                                        <span>2. TDE (Taxa Dificuldade) {{ frete.temTde ? 'Aprovada' : 'Não Aplicável' }}</span>
-                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(frete.tdeCalculado)}}</span>
+                                                        <span>2. Valor Complementar/Taxas {{ frete.temTde ? 'Aprovado' : 'Aprovado' }}</span>
+                                                        <span class="font-bold shrink-0 ml-2">+ {{formatMoney(frete.tipo_operacao === 'Complemento' ? frete.correto : frete.tdeCalculado)}}</span>
                                                     </li>
                                                     <li class="flex justify-between border-t border-slate-300 pt-3 mt-1 text-slate-800">
                                                         <span>= TETO JUSTO APROVADO PELO SISTEMA</span>
@@ -1043,7 +1022,7 @@ const irParaAuditoria = () => router.visit('/auditoria');
             </div>
         </transition>
 
-    </AuthenticatedLayout>
+    </div>
 </template>
 
 <style>
@@ -1069,5 +1048,14 @@ const irParaAuditoria = () => router.visit('/auditoria');
 .modal-overlay-leave-to > div {
   transform: translateY(20px);
   opacity: 0;
+}
+
+/* Esconde a barra de rolagem mas permite o scroll */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 </style>
