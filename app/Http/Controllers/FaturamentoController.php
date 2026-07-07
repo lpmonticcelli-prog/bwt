@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\City;
 use App\Models\Faturamento;
+use App\Services\CalculadoraReceitaService; // Injeção do nosso Service Nível God
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -34,6 +35,7 @@ class FaturamentoController extends Controller
             foreach ($request->file('xml_files') as $file) {
                 if (strtolower($file->getClientOriginalExtension()) !== 'xml') continue;
 
+                // Leitura Limpa do XML
                 $xmlContent = file_get_contents($file->getPathname());
                 $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
                 $xmlObj = simplexml_load_string($xmlContent);
@@ -46,13 +48,12 @@ class FaturamentoController extends Controller
                 $tipoCTe = $this->extractTipoCTe($data);
                 $nfeChave = $this->extractNfe($data);
                 $produto = $this->extractProduto($data);
-                
-                // NOVO: Extração de Inteligência da Operação
                 $dataEmissao = $this->extractDataEmissao($data);
                 $tipoOperacao = $this->extractTipoOperacao($observacoes, $tipoCTe);
 
                 if (!$cidadeDestino) continue;
 
+                // Cruzamento Geográfico
                 $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
 
                 if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
@@ -70,7 +71,9 @@ class FaturamentoController extends Controller
 
                 $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
 
-                // 1. CUSTO E4LOG
+                // =========================================================================
+                // MATEMÁTICA DO CUSTO (E4LOG) - Apenas para projeção de Lucro
+                // =========================================================================
                 $custoFixo = (float) $ruleE4log->fixed_value;
                 $custoPct = (float) $ruleE4log->excess_percentage / 100;
                 $custoFreteBase = max($custoFixo, ($valorCarga * $custoPct));
@@ -84,50 +87,41 @@ class FaturamentoController extends Controller
                 $custoTotalE4log = $custoFreteBase + $custoTde;
                 if ($tipoCTe == '1') { $custoFreteBase = 0; $custoTotalE4log = $custoTde; }
 
-                // 2. RECEITA BWT
-                $receitaFixo = (float) $ruleBwt->fixed_value;
-                $receitaPct = (float) $ruleBwt->excess_percentage / 100;
-                $receitaFretePct = $valorCarga * $receitaPct;
-                $receitaFreteBase = max($receitaFixo, $receitaFretePct);
+                // =========================================================================
+                // ARQUITETURA LIMPA: CHAMADA AO SERVICE PARA MATEMÁTICA DA RECEITA
+                // =========================================================================
+                $matematicaSolfacil = CalculadoraReceitaService::calcularSolfacil($ruleBwt, $valorCarga, $temTde, $tipoOperacao);
 
-                $receitaTde = 0;
-                if ($temTde) {
-                    $tdeMinBwt = (float) ($ruleBwt->tde_min_value ?? 200.00);
-                    $tdePercentBwt = (float) ($ruleBwt->tde_percentage ?? 30);
-                    $receitaTde = max($tdeMinBwt, $receitaFreteBase * ($tdePercentBwt / 100));
-                }
-
-                if ($tipoCTe == '1') { $receitaFreteBase = 0; $receitaSemImposto = $receitaTde; } 
-                else { $receitaSemImposto = $receitaFreteBase + $receitaTde; }
-
-                $icmsPercent = (float) ($ruleBwt->icms_percentage ?? 12);
-                $fatorIcms = 1 - ($icmsPercent / 100); 
-                
-                $receitaTeoricaTotal = $receitaSemImposto > 0 ? ($receitaSemImposto / $fatorIcms) : 0; 
-                $icmsCalculado = $receitaTeoricaTotal - $receitaSemImposto;
-
+                // Cálculo do Lucro (Receita Efetivamente Faturada - Custo da Transportadora)
                 $lucroLiquido = $receitaBwtXML - $custoTotalE4log;
 
+                // =========================================================================
+                // PERSISTÊNCIA NA BASE DE DADOS
+                // =========================================================================
                 $resultados[] = Faturamento::updateOrCreate(
                     ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
                     [
                         'fechamento_periodo_id' => $request->input('fechamento_id'),
                         'destino' => Str::limit($cidadeDestino, 150, ''),
                         'regra' => Str::limit($regionBwt->name . " (Sol Fácil)", 100, ''),
-                        'tipo_operacao' => Str::limit($tipoOperacao, 50, ''), // NOVO
-                        'data_emissao' => $dataEmissao, // NOVO
-                        'data_entrega' => null, // NOVO (Aguardando Baixa)
-                        'tipo_cte' => Str::limit($tipoOperacao, 100, ''), // Mantido para compatibilidade legado
+                        'tipo_operacao' => Str::limit($tipoOperacao, 50, ''),
+                        'data_emissao' => $dataEmissao,
+                        'data_entrega' => null, 
+                        'tipo_cte' => Str::limit($tipoOperacao, 100, ''),
                         'nfe_chave' => Str::limit($nfeChave, 250, ''),
                         'produto' => Str::limit($produto, 250, ''),
                         'valor_carga' => $valorCarga,
+                        
                         'custo_frete_base' => $custoFreteBase,
                         'custo_tde' => $custoTde,
                         'custo_total' => $custoTotalE4log,
-                        'receita_frete_base' => $receitaFreteBase,
-                        'receita_tde' => $receitaTde,
-                        'receita_icms' => $icmsCalculado,
-                        'receita_teorica' => $receitaTeoricaTotal,
+                        
+                        // Valores Desmembrados Pelo Service:
+                        'receita_frete_base' => $matematicaSolfacil['frete_base'],
+                        'receita_tde' => $matematicaSolfacil['tde'],
+                        'receita_icms' => $matematicaSolfacil['icms'],
+                        'receita_teorica' => $matematicaSolfacil['total'],
+                        
                         'receita_real' => $receitaBwtXML,
                         'lucro' => $lucroLiquido
                     ]
@@ -156,6 +150,9 @@ class FaturamentoController extends Controller
         }
     }
 
+    // =========================================================================
+    // FUNÇÕES EXTRATORAS DE XML (HELPERS)
+    // =========================================================================
     private function getBaseNode($data) { if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte']; if (isset($data['infCte'])) return $data['infCte']; return null; }
     private function extractCity($data) { $base = $this->getBaseNode($data); if ($base && isset($base['dest']['enderDest']['xMun'])) return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')); return null; }
     private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; return 0.00; }
@@ -183,7 +180,6 @@ class FaturamentoController extends Controller
         return 'N/A';
     }
 
-    // NOVAS FUNÇÕES EXTRATORAS DE INTELIGÊNCIA
     private function extractDataEmissao($data) {
         $base = $this->getBaseNode($data);
         if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10);

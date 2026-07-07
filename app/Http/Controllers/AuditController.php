@@ -3,10 +3,9 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\RegiaoFrete;
+use App\Models\City;
 use App\Models\Frete;
-use App\Models\Faturamento;
-use App\Services\CalculadoraFreteService; 
+use App\Services\CalculadoraCustoService; // Importação do nosso Cérebro de Auditoria
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -22,19 +21,21 @@ class AuditController extends Controller
         ]);
     }
 
-    public function processarCusto(Request $request) { return $this->processarLote($request, 'custo'); }
-    public function processarReceita(Request $request) { return $this->processarLote($request, 'receita'); }
-
-    private function processarLote(Request $request, $tipoProcessamento)
+    public function processarCusto(Request $request)
     {
         try {
-            if (!$request->hasFile('xml_files')) throw new Exception("Nenhum ficheiro recebido.");
+            \DB::connection()->getPdo();
 
+            if (!$request->hasFile('xml_files')) throw new Exception("Nenhum ficheiro recebido.");
+            $request->validate(['xml_files' => 'required|array']);
+            
             $resultados = [];
+            $errosDetetive = [];
 
             foreach ($request->file('xml_files') as $file) {
                 if (strtolower($file->getClientOriginalExtension()) !== 'xml') continue;
 
+                // Leitura Limpa do XML
                 $xmlContent = file_get_contents($file->getPathname());
                 $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
                 $xmlObj = simplexml_load_string($xmlContent);
@@ -42,165 +43,100 @@ class AuditController extends Controller
 
                 $nomeArquivo = Str::limit($file->getClientOriginalName(), 250, '');
                 $cidadeDestino = $this->extractCity($data);
-                $valorNF = $this->extractInvoiceValue($data);
+                $valorCarga = $this->extractInvoiceValue($data);
                 $valorCobradoNoXML = $this->extractFreightValue($data);  
-                 
-                $observacoesTexto = $this->extractObs($data); // TEXTO ORIGINAL DAS OBSERVAÇÕES
+                
+                $observacoes = strtoupper($this->extractObs($data));
                 $tipoCTe = $this->extractTipoCTe($data);
-                $isComplemento = ($tipoCTe === '1' || str_contains(strtoupper($observacoesTexto), 'COMPL'));
                 
                 $dataEmissao = $this->extractDataEmissao($data);
                 $produto = $this->extractProduto($data);
-                $tipoOperacao = $this->extractTipoOperacao(strtoupper($observacoesTexto), $tipoCTe);
+                $tipoOperacao = $this->extractTipoOperacao($observacoes, $tipoCTe);
                 
                 $cteChave = $this->extractCteKey($data);
                 $chaveComplementada = $this->extractChaveComplementada($data);
                 $nfeChave = $this->extractNfe($data); 
-                 
+                
                 if (!$cidadeDestino) continue;
 
-                $mapaGeografico = RegiaoFrete::where('cidade', $cidadeDestino)->first();
-                $teveTde = $this->verificarTde($data, strtoupper($observacoesTexto), $tipoCTe);
+                // Cruzamento Geográfico
+                $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
 
-                if ($tipoProcessamento === 'custo') {
-                    if ($mapaGeografico && $mapaGeografico->regiao_e4log) {
-                        $custoE4log = CalculadoraFreteService::calcularE4log($mapaGeografico->regiao_e4log, $valorNF, $teveTde);
-                        $regraTexto = 'Região ' . $mapaGeografico->regiao_e4log;
-                    } else {
-                        $custoE4log = ['total' => 0, 'frete_base' => 0, 'tde' => 0];
-                        $regraTexto = '⚠️ CIDADE NÃO MAPEADA';
-                    }
-                     
-                    $custoPresumido = $isComplemento ? $valorCobradoNoXML : $custoE4log['total'];
-                    $diferenca = $valorCobradoNoXML - $custoPresumido;
+                if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
+                if ($city->regions->isEmpty()) { $errosDetetive[] = "[{$cidadeDestino} sem Região]"; continue; }
 
-                    Frete::updateOrCreate(
-                        ['arquivo' => $nomeArquivo], 
-                        [
-                            'fechamento_periodo_id' => $request->input('fechamento_id'),
-                            'destino' => Str::limit($cidadeDestino, 150, ''),
-                            'tipo_operacao' => Str::limit($tipoOperacao, 50, ''),
-                            'data_emissao' => $dataEmissao,
-                            'nfe_chave' => Str::limit($nfeChave, 250, ''), 
-                            'cte_chave' => $cteChave,
-                            'chave_complementada' => $chaveComplementada,
-                            'valorNF' => $valorNF,
-                            'fixoRegra' => $custoE4log['frete_base'], 
-                            'percentualRegra' => 0, 
-                            'adValoremCalculado' => 0, 
-                            'freteBaseCalculado' => $custoE4log['frete_base'],
-                            'taxasExtras' => 0, 
-                            'temTde' => $teveTde,
-                            'tdeCalculado' => $custoE4log['tde'],
-                            'cobrado' => round($valorCobradoNoXML, 2),
-                            'correto' => round($custoPresumido, 2),
-                            'diferenca' => round($diferenca, 2), 
-                            'is_correto' => abs($diferenca) <= 0.50,
-                            'regra' => $regraTexto,
-                            'observacoes' => Str::limit($observacoesTexto, 1000, '') // SALVA AS OBSERVAÇÕES
-                        ]
-                    );
-                } 
-                elseif ($tipoProcessamento === 'receita') {
-                    if ($mapaGeografico && $mapaGeografico->regiao_solfacil) {
-                        $receitaSolfacil = CalculadoraFreteService::calcularSolfacil($mapaGeografico->regiao_solfacil, $valorNF, $teveTde);
-                        $regraTexto = 'Região ' . $mapaGeografico->regiao_solfacil;
-                    } else {
-                        $receitaSolfacil = ['total' => 0, 'frete_base' => 0, 'tde' => 0, 'icms' => 0];
-                        $regraTexto = '⚠️ CIDADE NÃO MAPEADA';
-                    }
+                // Procuramos exclusivamente a regra da transportadora parceira
+                $regionE4log = $city->regions->filter(fn($r) => strtolower($r->context) === 'e4log')->first();
+                
+                if (!$regionE4log) { $errosDetetive[] = "[{$cidadeDestino} não tem rota E4LOG mapeada]"; continue; }
 
-                    $receitaPresumida = $isComplemento ? $valorCobradoNoXML : $receitaSolfacil['total']; 
+                $ruleE4log = $regionE4log->pricingRules->first();
 
-                    $custoE4logTeorico = 0;
-                    if ($mapaGeografico && $mapaGeografico->regiao_e4log) {
-                        $cTeorico = CalculadoraFreteService::calcularE4log($mapaGeografico->regiao_e4log, $valorNF, $teveTde);
-                        $custoE4logTeorico = $cTeorico['total'];
-                    }
+                if (!$ruleE4log) { $errosDetetive[] = "[A Região de {$cidadeDestino} está sem tabela de preço]"; continue; }
 
-                    $compsBwt = $this->extractComponentes($data);
-                    $rec_frete = $compsBwt['frete'];
-                    $rec_tde = $compsBwt['tde'];
-                    $rec_icms = $compsBwt['icms'];
+                $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
 
-                    if ($rec_frete == 0 && $rec_tde == 0 && $rec_icms == 0) {
-                        if ($isComplemento) { $rec_tde = $valorCobradoNoXML; } else { $rec_frete = $valorCobradoNoXML; }
-                    }
+                // ==========================================
+                // ARQUITETURA LIMPA: CÁLCULO PELO SERVICE
+                // ==========================================
+                $matematicaE4log = CalculadoraCustoService::calcularE4log($ruleE4log, $valorCarga, $temTde, $tipoOperacao);
+                
+                // Diferença (Risco de Glosa)
+                // Se cobraram mais do que a tabela permite, gera diferença positiva (Glosa).
+                $diferenca = $valorCobradoNoXML - $matematicaE4log['total'];
 
-                    Faturamento::updateOrCreate(
-                        ['arquivo' => $nomeArquivo], 
-                        [
-                            'fechamento_periodo_id' => $request->input('fechamento_id'),
-                            'destino' => Str::limit($cidadeDestino, 150, ''),
-                            'regra' => $regraTexto,
-                            'tipo_operacao' => Str::limit($tipoOperacao, 50, ''),
-                            'tipo_cte' => Str::limit($tipoOperacao, 100, ''),
-                            'data_emissao' => $dataEmissao,
-                            'nfe_chave' => Str::limit($nfeChave, 250, ''),
-                            'cte_chave' => $cteChave,
-                            'chave_complementada' => $chaveComplementada,
-                            'produto' => Str::limit($produto, 250, ''),
-                            'valor_carga' => $valorNF,
-                            'custo_frete_base' => 0,
-                            'custo_tde' => 0,
-                            'custo_total' => $custoE4logTeorico, 
-                            'receita_frete_base' => round($rec_frete, 2),
-                            'receita_tde' => round($rec_tde, 2),
-                            'receita_icms' => round($rec_icms, 2),
-                            'receita_teorica' => round($receitaPresumida, 2), 
-                            'receita_real' => round($valorCobradoNoXML, 2), 
-                            'lucro' => round($valorCobradoNoXML - $custoE4logTeorico, 2),
-                            'observacoes' => Str::limit($observacoesTexto, 1000, '') // SALVA AS OBSERVAÇÕES
-                        ]
-                    );
-                }
+                Frete::updateOrCreate(
+                    ['arquivo' => $nomeArquivo], 
+                    [
+                        'fechamento_periodo_id' => $request->input('fechamento_id'),
+                        'destino' => Str::limit($cidadeDestino, 150, ''),
+                        'tipo_operacao' => Str::limit($tipoOperacao, 50, ''),
+                        'data_emissao' => $dataEmissao,
+                        'nfe_chave' => Str::limit($nfeChave, 250, ''), 
+                        'cte_chave' => $cteChave,
+                        'chave_complementada' => $chaveComplementada,
+                        'valorNF' => $valorCarga,
+                        
+                        // Gravando os valores cravados do Service
+                        'fixoRegra' => $ruleE4log->fixed_value,
+                        'percentualRegra' => $ruleE4log->excess_percentage,
+                        'freteBaseCalculado' => $matematicaE4log['frete_base'],
+                        'temTde' => $temTde,
+                        'tdeCalculado' => $matematicaE4log['tde'],
+                        'taxasExtras' => 0, // Pode evoluir para mapear Ad Valorem, Pedágios
+                        
+                        'cobrado' => round($valorCobradoNoXML, 2),
+                        'correto' => $matematicaE4log['total'],
+                        'diferenca' => round($diferenca, 2), 
+                        
+                        // Margem de erro de arredondamento aceitável da SEFAZ
+                        'is_correto' => abs($diferenca) <= 0.50,
+                        'regra' => Str::limit($regionE4log->name . " (E4LOG)", 100, ''),
+                        'observacoes' => Str::limit($observacoes, 1000, '')
+                    ]
+                );
+
                 $resultados[] = $nomeArquivo;
             }
-            if (empty($resultados)) throw new Exception("Nenhum XML foi processado.");
-            return response()->json(['success' => true]);
 
-        } catch (Throwable $e) { return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422); }
-    }
+            if (!empty($errosDetetive)) { Log::warning("Auditoria E4LOG - Lote parcial. Descartes: " . implode(" | ", array_unique($errosDetetive))); }
+            if (empty($resultados)) throw new Exception("Nenhum XML processado. " . implode(" | ", array_unique($errosDetetive)));
 
-    private function verificarTde($data, $obs, $tipoCTe) {
-        if (str_contains($obs, 'TDE') || str_contains($obs, 'RURAL')) return true;
-        if ($tipoCTe === '0') {
-            $base = $this->getBaseNode($data);
-            if ($base && isset($base['vPrest']['Comp'])) {
-                $comps = $base['vPrest']['Comp'];
-                if (isset($comps['xNome'])) $comps = [$comps];
-                foreach ($comps as $c) {
-                    $nome = strtoupper(trim((string)($c['xNome'] ?? '')));
-                    if (str_contains($nome, 'TDE') || str_contains($nome, 'RURAL') || str_contains($nome, 'DIFICULDADE')) return true;
-                }
-            }
+            if ($request->wantsJson()) return response()->json(['success' => true]);
+            return redirect()->back();
+
+        } catch (Throwable $e) { 
+            if ($request->wantsJson()) return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422);
+            return back()->withErrors(['erro_fatal' => 'DETALHE: ' . $e->getMessage()]);
         }
-        return false;
     }
 
-    private function extractComponentes($data) {
-        $base = $this->getBaseNode($data);
-        $frete = 0; $tde = 0; $icms = 0;
-
-        if ($base && isset($base['vPrest']['Comp'])) {
-            $comps = $base['vPrest']['Comp'];
-            if (isset($comps['xNome'])) $comps = [$comps];
-            foreach ($comps as $c) {
-                $nome = strtoupper(trim((string)($c['xNome'] ?? '')));
-                $valor = (float)($c['vComp'] ?? 0);
-                
-                if (str_contains($nome, 'FRETE') || str_contains($nome, 'PESO')) { $frete += $valor; } 
-                elseif (str_contains($nome, 'TDE') || str_contains($nome, 'RURAL') || str_contains($nome, 'DIFICULDADE') || str_contains($nome, 'ENTREGA')) { $tde += $valor; } 
-                elseif (str_contains($nome, 'IMP') || str_contains($nome, 'ICMS') || str_contains($nome, 'TRIBUTO')) { $icms += $valor; } 
-                else { if (!str_contains($nome, 'PEDAGIO') && !str_contains($nome, 'GRIS')) { $frete += $valor; } }
-            }
-        }
-        return ['frete' => $frete, 'tde' => $tde, 'icms' => $icms];
-    }
-
+    // =========================================================================
+    // FUNÇÕES EXTRATORAS DE XML (HELPERS PRIVADOS)
+    // =========================================================================
     private function getBaseNode($data) { if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte']; if (isset($data['infCte'])) return $data['infCte']; return null; }
     private function extractCity($data) { $base = $this->getBaseNode($data); if ($base && isset($base['dest']['enderDest']['xMun'])) return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')); return null; }
-    private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; if ($base && isset($base['infCarga']['vCarga'])) return (float) $base['infCarga']['vCarga']; return 0.00; }
+    private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; return 0.00; }
     private function extractFreightValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['vPrest']['vTPrest'])) return (float) $base['vPrest']['vTPrest']; return 0.00; }
     
     private function extractObs($data) { 
@@ -214,7 +150,7 @@ class AuditController extends Controller
         }
         return $obs;
     }
-    
+
     private function extractTipoCTe($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; return '0'; }
     
     private function extractCteKey($data) {
@@ -241,5 +177,11 @@ class AuditController extends Controller
 
     private function extractProduto($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['proPred'])) { $prod = $base['infCTeNorm']['infCarga']['proPred']; if (is_array($prod)) return implode(" ", $prod); return (string) $prod; } return 'N/A'; }
     private function extractDataEmissao($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10); return null; }
-    private function extractTipoOperacao($observacoes, $tipoCTe) { if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução'; if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega'; if ($tipoCTe == '1' || str_contains($observacoes, 'COMPL')) return 'Complemento'; return 'Entrega'; }
+    
+    private function extractTipoOperacao($observacoes, $tipoCTe) { 
+        if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução'; 
+        if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega'; 
+        if ($tipoCTe == '1' || str_contains($observacoes, 'COMPL')) return 'Complemento'; 
+        return 'Entrega'; 
+    }
 }
