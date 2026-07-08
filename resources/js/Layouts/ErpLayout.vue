@@ -35,15 +35,15 @@ const page = usePage();
                 <div>
                     <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Auditoria & Operação</p>
                     <div class="space-y-1">
-                        <Link href="/auditoria" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group" :class="{ 'bg-slate-800 text-white': page.url.startsWith('/auditoria') }">
+                        <Link href="/auditoria" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/auditoria') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
                             <span class="text-lg">📉</span>
                             <span class="text-sm font-medium">Auditoria E4LOG</span>
                         </Link>
-                        <Link href="/faturamento" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group" :class="{ 'bg-slate-800 text-white': page.url.startsWith('/faturamento') }">
+                        <Link href="/faturamento" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/faturamento') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
                             <span class="text-lg">📈</span>
                             <span class="text-sm font-medium">Faturamento Sol Fácil</span>
                         </Link>
-                        <Link href="/fechamentos" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors group" :class="{ 'bg-slate-800 text-white': page.url.startsWith('/fechamentos') }">
+                        <Link href="/fechamentos" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/fechamentos') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
                             <span class="text-lg">📤</span>
                             <span class="text-sm font-medium">Lançamentos (Upload)</span>
                         </Link>
@@ -53,20 +53,29 @@ const page = usePage();
                 <div>
                     <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3 flex items-center gap-2">Módulos Pro <span class="bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded text-[8px]">NOVO</span></p>
                     <div class="space-y-1">
-                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-colors group">
-                            <span class="text-lg opacity-70 group-hover:opacity-100">⏱️</span> <span class="text-sm font-medium">Simulador Contratos</span>
+                        <Link href="/simulador-contratos" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/simulador-contratos') ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/simulador-contratos') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">⏱️</span> 
+                            <span class="text-sm font-medium">Simulador Contratos</span>
                         </Link>
-                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-colors group">
-                            <span class="text-lg opacity-70 group-hover:opacity-100">⏳</span> <span class="text-sm font-medium">Auditoria SLA</span>
+                        
+                        <Link href="/auditoria-sla" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/auditoria-sla') ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/auditoria-sla') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">⏳</span> 
+                            <span class="text-sm font-medium">Auditoria SLA</span>
                         </Link>
-                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-colors group">
-                            <span class="text-lg opacity-70 group-hover:opacity-100">📱</span> <span class="text-sm font-medium">Robô WhatsApp</span>
+                        
+                        <Link href="/robo-whatsapp" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/robo-whatsapp') ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/robo-whatsapp') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">📱</span> 
+                            <span class="text-sm font-medium">Robô WhatsApp</span>
                         </Link>
-                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-colors group">
-                            <span class="text-lg opacity-70 group-hover:opacity-100">🤝</span> <span class="text-sm font-medium">Portal do Parceiro</span>
+                        
+                        <Link href="/portal-parceiro" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/portal-parceiro') ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/portal-parceiro') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">🤝</span> 
+                            <span class="text-sm font-medium">Portal do Parceiro</span>
                         </Link>
-                        <Link href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-500 hover:text-white hover:bg-slate-800 transition-colors group">
-                            <span class="text-lg opacity-70 group-hover:opacity-100">🏦</span> <span class="text-sm font-medium">Conciliação Bancária</span>
+                        
+                        <Link href="/conciliacao-bancaria" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/conciliacao-bancaria') ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/conciliacao-bancaria') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">🏦</span> 
+                            <span class="text-sm font-medium">Conciliação Bancária</span>
                         </Link>
                     </div>
                 </div>
@@ -115,7 +124,7 @@ const page = usePage();
                 </div>
             </header>
 
-            <main class="flex-1 overflow-y-auto pt-20">
+            <main class="flex-1 overflow-y-auto pt-20 bg-slate-50">
                 <div class="p-4 sm:p-8 max-w-screen-2xl mx-auto min-h-full">
                     <slot />
                 </div>

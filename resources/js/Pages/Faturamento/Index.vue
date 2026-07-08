@@ -39,8 +39,11 @@ const abrirKpiModal = (tipo) => { kpiModalAberto.value = tipo; };
     <Head title="Painel de Controle - BWT Logística" />
 
     <ErpLayout>
+        <template #header-title>Painel Executivo</template>
+        <template #header-subtitle>Inteligência Financeira e Auditoria</template>
+
         <template #header-actions>
-            <select v-model="filtroSelecionado" @change="aplicarFiltro" class="bg-slate-50 border border-slate-200 text-slate-700 text-sm font-bold focus:ring-0 rounded-xl p-2 cursor-pointer w-64">
+            <select v-model="filtroSelecionado" @change="aplicarFiltro" class="bg-white border border-slate-200 text-slate-700 text-sm font-bold focus:ring-2 focus:ring-blue-500 rounded-xl p-2 cursor-pointer w-64 shadow-sm transition-all">
                 <option value="">Visão Global (Consolidado)</option>
                 <option v-for="f in fechamentos" :key="f.id" :value="f.id">{{ f.titulo }}</option>
             </select>
@@ -53,8 +56,17 @@ const abrirKpiModal = (tipo) => { kpiModalAberto.value = tipo; };
             :resumoAuditoria="resumoAuditoria"
         />
 
-        <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-5">
-           </div>
+        <div class="mt-8 mb-4 flex flex-wrap gap-3">
+            <button @click="alternarAba('match')" :class="abaExpandida === 'match' ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-50'" class="px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm border border-slate-200 transition-all">
+                🤝 Match de Viagens
+            </button>
+            <button @click="alternarAba('divergentes')" :class="abaExpandida === 'divergentes' ? 'bg-red-50 text-red-700 border-red-200 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50'" class="px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm border border-slate-200 transition-all">
+                ⚠️ Divergências
+            </button>
+            <button @click="alternarAba('corretos')" :class="abaExpandida === 'corretos' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50'" class="px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm border border-slate-200 transition-all">
+                ✅ Validados
+            </button>
+        </div>
 
         <MatchTable v-if="abaExpandida === 'match'" :viagens="cruzamentoViagens" @abrir-dossie="abrirDossieMatch" />
         <DivergenciasTable v-if="abaExpandida === 'divergentes'" :fretes="fretesDetalhados.filter(f => !f.is_correto)" :viagens="cruzamentoViagens" />
