@@ -5,7 +5,8 @@ use App\Http\Controllers\AuditController;
 use App\Http\Controllers\FaturamentoController;
 use App\Http\Controllers\FechamentoController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\SimuladorController; // 👇 IMPORTAÇÃO DO NOVO CONTROLLER AQUI
+use App\Http\Controllers\SimuladorController; 
+use App\Http\Controllers\AuditoriaSlaController; // 👇 IMPORTAÇÃO DO NOVO CONTROLLER AQUI
 use Illuminate\Http\Request;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -46,9 +47,16 @@ Route::middleware('auth')->group(function () {
     })->name('fechamentos.sincronizar');
 });
 
-// 👇 NOVA ROTA: Módulo PRO (Simulador de Contratos) 👇
+// Módulo PRO (Simulador de Contratos) 
 Route::middleware('auth')->group(function () {
     Route::get('/simulador-contratos', [SimuladorController::class, 'index'])->name('simulador.index');
+});
+
+// 👇 NOVA ROTA: Módulo Auditoria SLA (Em Memória / PDF) 👇
+Route::middleware('auth')->group(function () {
+    Route::get('/auditoria-sla', [AuditoriaSlaController::class, 'index'])->name('auditoria-sla.index');
+    Route::post('/auditoria-sla/processar', [AuditoriaSlaController::class, 'processar'])->name('auditoria-sla.processar');
+    Route::get('/auditoria-sla/exportar-pdf/{batchId}', [AuditoriaSlaController::class, 'exportarPdf'])->name('auditoria-sla.export');
 });
 
 // Gestão do Perfil
