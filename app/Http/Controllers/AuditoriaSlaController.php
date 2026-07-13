@@ -74,9 +74,9 @@ class AuditoriaSlaController extends Controller
 
                 // 2. APLICAÇÃO DAS REGRAS BWT -> SOL FÁCIL
                 if (str_contains($regiaoStr, '1')) { $minimo = 350.00; $percentual = 0.03; } 
-                elseif (str_contains($regiaoStr, '2')) { $minimo = 350.00; $percentual = 0.04; } 
-                elseif (str_contains($regiaoStr, '3')) { $minimo = 550.00; $percentual = 0.06; } 
-                elseif (str_contains($regiaoStr, '4')) { $minimo = 600.00; $percentual = 0.06; } 
+                elseif (str_contains($regiaoStr, '2')) { $minimo = 350.00; $percentual = 0.035; } 
+                elseif (str_contains($regiaoStr, '3')) { $minimo = 550.00; $percentual = 0.04; } 
+                elseif (str_contains($regiaoStr, '4')) { $minimo = 600.00; $percentual = 0.05; } 
 
                 if ($tipoOperacao === 'Complemento') {
                     $freteBase = 0; 
@@ -85,11 +85,12 @@ class AuditoriaSlaController extends Controller
                     $freteBase = max($minimo, $freteCalculado);
                 }
 
-                $valorTde = $temTde ? max(200.00, $freteBase * 0.30) : 0;
-                $subtotal = $freteBase + $valorTde;
+                // REGRAS DA TDE ATUALIZADAS
+                $valorTde = $temTde ? (($freteBase > 666.67) ? ($freteBase * 0.30) : 200.00) : 0;
                 
-                // ICMS a 12% por dentro
-                $valorSlaCorreto = $subtotal / 0.88;
+                // ICMS a 12% por dentro (Apenas no frete base, TDE não tem ICMS)
+                $freteComIcms = $freteBase / 0.88;
+                $valorSlaCorreto = $freteComIcms + $valorTde;
 
                 $diferenca = $valorSlaCorreto - $valorCobradoOriginal;
                 
@@ -130,6 +131,12 @@ class AuditoriaSlaController extends Controller
 
     public function exportarPdf($batchId)
     {
+        // ---------------------------------------------------------
+        // PREVINE ERRO DE TIMEOUT E MEMÓRIA NO DOMPDF PARA MILHARES DE LINHAS
+        // ---------------------------------------------------------
+        ini_set('max_execution_time', 0); // Remove o limite de 30 segundos
+        ini_set('memory_limit', '2G');    // Aumenta a memória temporariamente para 2GB
+        
         $dadosFlat = Cache::get('auditoria_sla_' . $batchId);
 
         if (!$dadosFlat) abort(404, 'Sessão de auditoria expirada.');
@@ -219,15 +226,20 @@ class AuditoriaSlaController extends Controller
 
         $regras = [
             'Região 1' => ['min' => 350.00, 'pct' => 0.03],
-            'Região 2' => ['min' => 350.00, 'pct' => 0.04],
-            'Região 3' => ['min' => 550.00, 'pct' => 0.06],
-            'Região 4' => ['min' => 600.00, 'pct' => 0.06],
+            'Região 2' => ['min' => 350.00, 'pct' => 0.035],
+            'Região 3' => ['min' => 550.00, 'pct' => 0.04],
+            'Região 4' => ['min' => 600.00, 'pct' => 0.05],
         ];
 
         foreach ($regras as $nome => $regra) {
             $freteBase = max($regra['min'], $valorCarga * $regra['pct']);
-            $tde = $temTde ? max(200.00, $freteBase * 0.30) : 0;
-            if (abs((($freteBase + $tde) / 0.88) - $valorCobrado) <= 1.50) {
+            
+            // REGRAS DA TDE ATUALIZADAS
+            $tde = $temTde ? (($freteBase > 666.67) ? ($freteBase * 0.30) : 200.00) : 0;
+            
+            // Calculo para descobrir a região sem aplicar ICMS na TDE
+            $freteComIcms = $freteBase / 0.88;
+            if (abs(($freteComIcms + $tde) - $valorCobrado) <= 1.50) {
                 return ['nome' => $nome . ' (Calc)', 'pct' => ($regra['pct'] * 100) . '%'];
             }
         }
@@ -236,9 +248,9 @@ class AuditoriaSlaController extends Controller
             $num = $matches[1];
             $pct = '-';
             if ($num == '1') $pct = '3%';
-            elseif ($num == '2') $pct = '4%';
-            elseif ($num == '3') $pct = '6%';
-            elseif ($num == '4') $pct = '6%';
+            elseif ($num == '2') $pct = '3.5%';
+            elseif ($num == '3') $pct = '4%';
+            elseif ($num == '4') $pct = '5%';
             return ['nome' => 'Região ' . $num, 'pct' => $pct];
         }
 
@@ -780,6 +792,7 @@ class AuditoriaSlaController extends Controller
             'SALESOPOLIS' => 'Região 4', 
             'SALMOURAO' => 'Região 3', 
             'SALTINHO' => 'Região 2', 
+            'SAO PEDRO' => 'Região 2', 
             'SALTO' => 'Região 1', 
             'SALTO DE PIRAPORA' => 'Região 2', 
             'SALTO GRANDE' => 'Região 4', 
