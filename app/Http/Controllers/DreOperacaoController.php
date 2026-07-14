@@ -1,0 +1,180 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
+use Barryvdh\DomPDF\Facade\Pdf;
+
+class DreOperacaoController extends Controller
+{
+    public function confrontarOperacao(Request $request)
+    {
+        $request->validate([
+            'batch_sla'   => 'required|string',
+            'batch_e4log' => 'required|string',
+        ]);
+
+        $dadosSla   = Cache::get('auditoria_sla_' . $request->batch_sla, []);
+        $dadosE4log = Cache::get('auditoria_e4log_' . $request->batch_e4log, []);
+
+        if (empty($dadosSla) || empty($dadosE4log)) {
+            return response()->json(['message' => 'Lotes expirados ou vazios. Processe os XMLs novamente.'], 400);
+        }
+
+        // Indexar E4LOG
+        $custosE4logIndexados = [];
+        foreach ($dadosE4log as $e4log) {
+            $chaveNfe = $e4log['chave_nfe'] ?? null;
+            if ($chaveNfe && !str_contains($chaveNfe, 'SEM_NFE')) {
+                $custosE4logIndexados[$chaveNfe] = $e4log;
+            }
+        }
+
+        $dreResultados = [];
+        $resumo = [
+            'total_receita_real' => 0, 'total_receita_ideal'=> 0,
+            'total_custo_real'   => 0, 'total_custo_ideal'  => 0,
+            'lucro_bruto_real'   => 0, 'lucro_bruto_ideal'  => 0,
+            'qtd_alertas'        => 0, 'qtd_match'          => 0, 'qtd_prejuizo'       => 0,
+        ];
+
+        // 1. CRUZAMENTO (BWT -> SOL FÁCIL)
+        foreach ($dadosSla as $sla) {
+            $chaveNfe = $sla['chave_nfe'] ?? null;
+            
+            // Separação de Receita Real (Se não existir, cai pro total)
+            $recValorFaturado = (float) ($sla['valor_cobrado'] ?? 0);
+            $recFreteCobrado = (float) ($sla['valor_frete_cobrado'] ?? $recValorFaturado);
+            $recTdeCobrado = (float) ($sla['valor_tde_cobrado'] ?? 0);
+            $recValorIdeal = (float) ($sla['valor_sla'] ?? 0);
+            
+            // E4LOG (Custo)
+            $cusMatriz = '-'; $cusFaturada = '-';
+            $cusValorCobrado = 0; $cusValorIdeal = 0; $cusDiferenca = 0;
+            $cusFreteCobrado = 0; $cusTdeCobrado = 0;
+            
+            $arquivoE4log = 'CUSTO PENDENTE';
+            $arquivosE4logCompl = [];
+
+            if ($chaveNfe && isset($custosE4logIndexados[$chaveNfe])) {
+                $e4log = $custosE4logIndexados[$chaveNfe];
+                
+                $cusMatriz = $e4log['regiao_sistema'] ?? '-';
+                $cusFaturada = ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')';
+                
+                $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
+                $cusFreteCobrado = (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado);
+                $cusTdeCobrado   = (float) ($e4log['valor_tde_cobrado'] ?? 0);
+                
+                $cusValorIdeal = (float) ($e4log['valor_sla'] ?? 0);
+                $cusDiferenca = (float) ($e4log['diferenca'] ?? 0);
+                
+                $arquivoE4log = $e4log['arquivo'] ?? '-';
+                $arquivosE4logCompl = $e4log['arquivos_complemento'] ?? [];
+
+                $resumo['qtd_match']++;
+                unset($custosE4logIndexados[$chaveNfe]); 
+            }
+
+            $lucroReal = $recValorFaturado - $cusValorCobrado;
+            $lucroIdeal = $recValorIdeal - $cusValorIdeal;
+            $margemRealPct = $recValorFaturado > 0 ? ($lucroReal / $recValorFaturado) * 100 : 0;
+
+            $statusGeral = 'OK';
+            if ($cusValorCobrado == 0) $statusGeral = 'CUSTO PENDENTE';
+            elseif ($lucroReal < 0) { $statusGeral = 'PREJUÍZO DRE'; $resumo['qtd_prejuizo']++; } 
+            elseif (($sla['diferenca'] ?? 0) != 0 || $cusDiferenca != 0) { $statusGeral = 'DIVERGÊNCIA'; $resumo['qtd_alertas']++; }
+
+            $resumo['total_receita_real'] += $recValorFaturado; $resumo['total_custo_real'] += $cusValorCobrado;
+            $resumo['total_receita_ideal'] += $recValorIdeal;   $resumo['total_custo_ideal'] += $cusValorIdeal;
+            $resumo['lucro_bruto_real'] += $lucroReal;          $resumo['lucro_bruto_ideal'] += $lucroIdeal;
+
+            $dreResultados[] = [
+                'chave_nfe'     => $chaveNfe,
+                'cidade'        => $sla['cidade_destino'] ?? 'Desconhecida',
+                'valor_carga'   => $sla['valor_carga'] ?? 0,
+                'tem_tde'       => $sla['tem_tde'] ?? 'Não',
+                // Arquivos e Complementos
+                'arquivo_bwt'        => $sla['arquivo'] ?? '-',
+                'arquivos_bwt_compl' => $sla['arquivos_complemento'] ?? [],
+                'arquivo_e4log'        => $arquivoE4log,
+                'arquivos_e4log_compl' => $arquivosE4logCompl,
+                
+                'receita' => [
+                    'matriz' => $sla['regiao_sistema'] ?? '-', 'faturada' => ($sla['regiao_faturada'] ?? '-') . ' (' . ($sla['percentual_faturado'] ?? '-') . ')',
+                    'real' => $recValorFaturado, 'real_frete' => $recFreteCobrado, 'real_tde' => $recTdeCobrado,
+                    'ideal' => $recValorIdeal, 'diferenca' => (float) ($sla['diferenca'] ?? 0)
+                ],
+                'custo' => [
+                    'matriz' => $cusMatriz, 'faturada' => $cusFaturada,
+                    'real' => $cusValorCobrado, 'real_frete' => $cusFreteCobrado, 'real_tde' => $cusTdeCobrado,
+                    'ideal' => $cusValorIdeal, 'diferenca' => $cusDiferenca
+                ],
+                'dre' => [
+                    'lucro_real' => $lucroReal, 'lucro_ideal' => $lucroIdeal, 'margem_real' => round($margemRealPct, 2),
+                ],
+                'status' => $statusGeral
+            ];
+        }
+
+        // 2. FUROS DE FATURAMENTO
+        foreach ($custosE4logIndexados as $chaveNfe => $e4log) {
+            $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
+            $cusValorIdeal = (float) ($e4log['valor_sla'] ?? 0);
+            
+            $resumo['total_custo_real'] += $cusValorCobrado; $resumo['lucro_bruto_real'] -= $cusValorCobrado;
+            $resumo['total_custo_ideal'] += $cusValorIdeal;  $resumo['lucro_bruto_ideal'] -= $cusValorIdeal;
+            $resumo['qtd_alertas']++; $resumo['qtd_prejuizo']++;
+
+            $dreResultados[] = [
+                'chave_nfe'     => $chaveNfe,
+                'cidade'        => $e4log['cidade_destino'] ?? '-',
+                'valor_carga'   => $e4log['valor_carga'] ?? 0,
+                'tem_tde'       => $e4log['tem_tde'] ?? 'Não',
+                'arquivo_bwt'        => 'NÃO LOCALIZADO NO LOTE (FURO DE RECEITA)',
+                'arquivos_bwt_compl' => [],
+                'arquivo_e4log'        => $e4log['arquivo'] ?? '-',
+                'arquivos_e4log_compl' => $e4log['arquivos_complemento'] ?? [],
+                'receita' => [
+                    'matriz' => 'FURO', 'faturada' => '-', 'real' => 0, 'real_frete' => 0, 'real_tde' => 0, 'ideal' => 0, 'diferenca' => 0
+                ],
+                'custo' => [
+                    'matriz' => $e4log['regiao_sistema'] ?? '-', 'faturada' => ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')',
+                    'real' => $cusValorCobrado, 'real_frete' => (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado), 'real_tde' => (float) ($e4log['valor_tde_cobrado'] ?? 0),
+                    'ideal' => $cusValorIdeal, 'diferenca' => (float) ($e4log['diferenca'] ?? 0)
+                ],
+                'dre' => [
+                    'lucro_real' => -$cusValorCobrado, 'lucro_ideal' => -$cusValorIdeal, 'margem_real' => -100,
+                ],
+                'status' => 'FURO DE RECEITA'
+            ];
+        }
+
+        usort($dreResultados, function($a, $b) {
+            if ($a['status'] === 'FURO DE RECEITA') return -1;
+            if ($b['status'] === 'FURO DE RECEITA') return 1;
+            if ($a['status'] === 'DIVERGÊNCIA') return -1;
+            if ($b['status'] === 'DIVERGÊNCIA') return 1;
+            return $a['dre']['lucro_real'] <=> $b['dre']['lucro_real'];
+        });
+
+        $batchDreId = Str::uuid()->toString();
+        Cache::put('dre_operacao_' . $batchDreId, ['dados' => $dreResultados, 'resumo' => $resumo], now()->addHours(2));
+
+        return response()->json(['batch_dre' => $batchDreId, 'resumo' => $resumo, 'data' => $dreResultados]);
+    }
+
+    public function exportarPdf($batchDreId) {
+        ini_set('max_execution_time', 0); ini_set('memory_limit', '2G');    
+        $dreData = Cache::get('dre_operacao_' . $batchDreId);
+        if (!$dreData) abort(404, 'Sessão da DRE expirada.');
+
+        $pdf = Pdf::loadView('pdf.dre_operacao_report', [
+            'dados' => $dreData['dados'], 'resumo' => $dreData['resumo'], 'data_auditoria' => now()->format('d/m/Y H:i')
+        ]);
+        $pdf->setPaper('A4', 'landscape'); 
+        return $pdf->stream('dre_operacao_' . now()->format('YmdHi') . '.pdf');
+    }
+}

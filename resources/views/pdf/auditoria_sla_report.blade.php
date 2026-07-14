@@ -123,7 +123,16 @@
 
                     <td style="font-weight: bold; font-size: 10px;">R$ {{ number_format($item['valor_carga'] ?? 0, 2, ',', '.') }}</td>
                     
-                    <td class="text-info" style="font-size: 10px;">R$ {{ number_format($item['valor_cobrado'], 2, ',', '.') }}</td>
+                    <td class="text-info" style="font-size: 10px;">
+                        <strong>R$ {{ number_format($item['valor_cobrado'], 2, ',', '.') }}</strong>
+                        @if(($item['valor_tde_cobrado'] ?? 0) > 0)
+                            <div style="font-size: 8px; color: #7f8c8d; margin-top: 2px; font-weight: normal;">
+                                Frt: R$ {{ number_format($item['valor_frete_cobrado'] ?? 0, 2, ',', '.') }}<br>
+                                <span style="color: #d35400;">TDE: R$ {{ number_format($item['valor_tde_cobrado'] ?? 0, 2, ',', '.') }}</span>
+                            </div>
+                        @endif
+                    </td>
+                    
                     <td class="text-info" style="font-size: 10px;">R$ {{ number_format($item['valor_sla'], 2, ',', '.') }}</td>
                     
                     <td class="{{ $item['diferenca'] == 0 ? '' : ($item['diferenca'] > 0 ? 'text-danger' : 'text-success') }}" style="font-weight: bold; font-size: 10px;">

@@ -96,17 +96,8 @@ class AuditoriaSlaController extends Controller
                 
                 $motivo = round($diferenca, 2) != 0 ? ($diferenca > 0 ? 'Deixamos de faturar (Perda de margem).' : 'Faturado indevidamente a maior.') : '-';
 
-                // --- INJEÇÕES DRE ---
-                $chaveNfe = $this->extractChaveNFe($data);
-                $localDestino = $this->extractCityAndUf($data);
-                if ($localDestino['uf'] !== 'SP' && $localDestino['uf'] !== '') {
-                    $cidadeDestino = $cidadeDestino . ' - ' . $localDestino['uf'];
-                }
-                // --------------------
-
                 $resultadosAtuais[] = [
                     'chave_cte' => $chaveCte,
-                    'chave_nfe' => $chaveNfe, // Injetado para DRE
                     'arquivo' => $nomeArquivo,
                     'cidade_destino' => $cidadeDestino,
                     'regiao_sistema' => $nomeRegiao,
@@ -118,12 +109,6 @@ class AuditoriaSlaController extends Controller
                     'chave_original' => $chaveOriginal,
                     'valor_carga' => (float) $valorCarga,
                     'valor_cobrado' => (float) $valorCobradoOriginal,
-                    
-                    // --- SEPARAÇÃO DE VALORES (FRETE VS TDE) ---
-                    'valor_frete_cobrado' => $tipoOperacao === 'Complemento' ? 0 : (float) $valorCobradoOriginal,
-                    'valor_tde_cobrado'   => $tipoOperacao === 'Complemento' ? (float) $valorCobradoOriginal : 0,
-                    // -------------------------------------------
-                    
                     'valor_sla' => (float) $valorSlaCorreto,
                     'diferenca' => (float) $diferenca,
                     'status' => round($diferenca, 2) == 0 ? 'Validado' : 'Divergente',
@@ -188,12 +173,6 @@ class AuditoriaSlaController extends Controller
 
                 if ($chavePai && isset($agrupados[$chavePai])) {
                     $agrupados[$chavePai]['valor_cobrado'] += $item['valor_cobrado'];
-                    
-                    // --- SOMA DE VALORES SEPARADOS ---
-                    $agrupados[$chavePai]['valor_frete_cobrado'] += $item['valor_frete_cobrado'];
-                    $agrupados[$chavePai]['valor_tde_cobrado']   += $item['valor_tde_cobrado'];
-                    // ---------------------------------
-                    
                     $agrupados[$chavePai]['valor_sla'] += $item['valor_sla'];
                     $agrupados[$chavePai]['diferenca'] += $item['diferenca'];
                     $agrupados[$chavePai]['tem_tde'] = 'Sim';
@@ -971,10 +950,6 @@ class AuditoriaSlaController extends Controller
     
     private function extractChaveOriginal($data) {
         $base = $this->getBaseNode($data);
-        
-        // --- CORREÇÃO 1: A tag no XML versão 4.00 da SEFAZ se chama chCTe, não chave! ---
-        if ($base && isset($base['infCteComp']['chCTe'])) return (string) $base['infCteComp']['chCTe'];
-        
         if ($base && isset($base['infCteComp']['chave'])) return (string) $base['infCteComp']['chave'];
         return null;
     }
@@ -1040,33 +1015,4 @@ class AuditoriaSlaController extends Controller
         if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; 
         return '0'; 
     }
-
-    private function extractChaveNFe($data) {
-        $base = $this->getBaseNode($data);
-        
-        // 1. CT-e Normal: Chave de 44 dígitos
-        if (isset($base['infCTeNorm']['infDoc']['infNFe']['chave'])) {
-            return (string) $base['infCTeNorm']['infDoc']['infNFe']['chave'];
-        }
-        
-        // --- CORREÇÃO 2: CT-e Complementar (TDE) ---
-        // Extrai o número da NF que vem nas observações para não ficar "SEM_NFE" e sumir no buraco negro.
-        $obs = $this->extractObs($data);
-        if (preg_match('/NF\s*[:\-]?\s*(\d+)/i', $obs, $matches)) {
-            return 'NF_EXTRAIDA_' . $matches[1]; 
-        }
-
-        return 'SEM_NFE_' . Str::uuid()->toString(); 
-    }
-
-    private function extractCityAndUf($data) { 
-        $base = $this->getBaseNode($data); 
-        if ($base && isset($base['dest']['enderDest']['xMun'])) {
-            return [
-                'cidade' => strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')),
-                'uf'     => strtoupper((string) ($base['dest']['enderDest']['UF'] ?? ''))
-            ];
-        }
-        return ['cidade' => 'Desconhecida', 'uf' => '']; 
-    }
-}
+}   

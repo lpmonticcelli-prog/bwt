@@ -6,7 +6,9 @@ use App\Http\Controllers\FaturamentoController;
 use App\Http\Controllers\FechamentoController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\SimuladorController; 
-use App\Http\Controllers\AuditoriaSlaController; // 👇 IMPORTAÇÃO DO NOVO CONTROLLER AQUI
+use App\Http\Controllers\AuditoriaSlaController;
+use App\Http\Controllers\AuditoriaE4logController; 
+use App\Http\Controllers\DreOperacaoController; // 👇 IMPORTAÇÃO DO NOVO CONTROLLER DA DRE AQUI
 use Illuminate\Http\Request;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -17,14 +19,18 @@ Route::get('/dashboard', [DashboardController::class, 'index'])
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
 
-// Módulo de Auditoria (Custo E4LOG - Ambiente Sandbox)
+// Módulo de Auditoria
 Route::middleware('auth')->group(function () {
+    // Rotas de Auditoria de Custo Existentes
     Route::get('/auditoria', [AuditController::class, 'index'])->name('auditoria.index');
     Route::get('/auditoria/regras', [AuditController::class, 'regras'])->name('auditoria.regras');
     Route::delete('/auditoria/limpar', [AuditController::class, 'limparLote'])->name('auditoria.limpar');
-    
     Route::post('/auditoria/processar', [AuditController::class, 'processarCusto'])->name('auditoria.processar');
     Route::get('/auditoria/processar', function () { return redirect()->route('auditoria.index'); });
+
+    // Rotas Módulo Auditoria E4LOG X BWT
+    Route::post('/auditoria/e4log/processar', [AuditoriaE4logController::class, 'processar'])->name('auditoria.e4log.processar');
+    Route::get('/auditoria/e4log/exportar-pdf/{batchId}', [AuditoriaE4logController::class, 'exportarPdf'])->name('auditoria.e4log.export');
 });
 
 // Módulo de Faturamento (Receita Sol Fácil)
@@ -52,11 +58,17 @@ Route::middleware('auth')->group(function () {
     Route::get('/simulador-contratos', [SimuladorController::class, 'index'])->name('simulador.index');
 });
 
-// 👇 NOVA ROTA: Módulo Auditoria SLA (Em Memória / PDF) 👇
+// Módulo Auditoria SLA (Em Memória / PDF)
 Route::middleware('auth')->group(function () {
     Route::get('/auditoria-sla', [AuditoriaSlaController::class, 'index'])->name('auditoria-sla.index');
     Route::post('/auditoria-sla/processar', [AuditoriaSlaController::class, 'processar'])->name('auditoria-sla.processar');
     Route::get('/auditoria-sla/exportar-pdf/{batchId}', [AuditoriaSlaController::class, 'exportarPdf'])->name('auditoria-sla.export');
+});
+
+// 👇 NOVAS ROTAS: Módulo de DRE (Cruzamento SLA x E4LOG) 👇
+Route::middleware('auth')->group(function () {
+    Route::post('/dre/confrontar', [DreOperacaoController::class, 'confrontarOperacao'])->name('dre.confrontar');
+    Route::get('/dre/exportar-pdf/{batchDreId}', [DreOperacaoController::class, 'exportarPdf'])->name('dre.exportar');
 });
 
 // Gestão do Perfil
