@@ -8,7 +8,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\SimuladorController; 
 use App\Http\Controllers\AuditoriaSlaController;
 use App\Http\Controllers\AuditoriaE4logController; 
-use App\Http\Controllers\DreOperacaoController; // 👇 IMPORTAÇÃO DO NOVO CONTROLLER DA DRE AQUI
+use App\Http\Controllers\DreOperacaoController;
 use Illuminate\Http\Request;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
@@ -19,21 +19,37 @@ Route::get('/dashboard', [DashboardController::class, 'index'])
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
 
-// Módulo de Auditoria
+// ==========================================
+// MÓDULO: ESTEIRA DE AUDITORIA E DRE (NOVO)
+// ==========================================
 Route::middleware('auth')->group(function () {
-    // Rotas de Auditoria de Custo Existentes
+    // 1. Auditoria SLA (BWT -> Sol Fácil) - A tela principal do Index.vue fica aqui
+    Route::get('/auditoria-sla', [AuditoriaSlaController::class, 'index'])->name('auditoria-sla.index');
+    Route::post('/auditoria-sla/processar', [AuditoriaSlaController::class, 'processar'])->name('auditoria-sla.processar');
+    Route::get('/auditoria-sla/exportar-pdf/{batchId}', [AuditoriaSlaController::class, 'exportarPdf'])->name('auditoria-sla.export');
+
+    // 2. Auditoria de Custos (E4LOG -> BWT)
+    Route::post('/auditoria/e4log/processar', [AuditoriaE4logController::class, 'processar'])->name('auditoria.e4log.processar');
+    Route::get('/auditoria/e4log/exportar-pdf/{batchId}', [AuditoriaE4logController::class, 'exportarPdf'])->name('auditoria.e4log.export');
+
+    // 3. DRE (O Cruzamento final)
+    Route::post('/dre/confrontar', [DreOperacaoController::class, 'confrontarOperacao'])->name('dre.confrontar');
+    Route::get('/dre/exportar-pdf/{batchDreId}', [DreOperacaoController::class, 'exportarPdf'])->name('dre.exportar');
+});
+
+// ==========================================
+// MÓDULOS ANTIGOS / OUTROS
+// ==========================================
+
+// Auditoria Antiga (Custo Padrão)
+Route::middleware('auth')->group(function () {
     Route::get('/auditoria', [AuditController::class, 'index'])->name('auditoria.index');
     Route::get('/auditoria/regras', [AuditController::class, 'regras'])->name('auditoria.regras');
     Route::delete('/auditoria/limpar', [AuditController::class, 'limparLote'])->name('auditoria.limpar');
     Route::post('/auditoria/processar', [AuditController::class, 'processarCusto'])->name('auditoria.processar');
-    Route::get('/auditoria/processar', function () { return redirect()->route('auditoria.index'); });
-
-    // Rotas Módulo Auditoria E4LOG X BWT
-    Route::post('/auditoria/e4log/processar', [AuditoriaE4logController::class, 'processar'])->name('auditoria.e4log.processar');
-    Route::get('/auditoria/e4log/exportar-pdf/{batchId}', [AuditoriaE4logController::class, 'exportarPdf'])->name('auditoria.e4log.export');
 });
 
-// Módulo de Faturamento (Receita Sol Fácil)
+// Módulo de Faturamento
 Route::middleware('auth')->group(function () {
     Route::get('/faturamento/solfacil', [FaturamentoController::class, 'index'])->name('faturamento.index');
     Route::post('/faturamento/processar', [FaturamentoController::class, 'processar'])->name('faturamento.processar');
@@ -56,19 +72,6 @@ Route::middleware('auth')->group(function () {
 // Módulo PRO (Simulador de Contratos) 
 Route::middleware('auth')->group(function () {
     Route::get('/simulador-contratos', [SimuladorController::class, 'index'])->name('simulador.index');
-});
-
-// Módulo Auditoria SLA (Em Memória / PDF)
-Route::middleware('auth')->group(function () {
-    Route::get('/auditoria-sla', [AuditoriaSlaController::class, 'index'])->name('auditoria-sla.index');
-    Route::post('/auditoria-sla/processar', [AuditoriaSlaController::class, 'processar'])->name('auditoria-sla.processar');
-    Route::get('/auditoria-sla/exportar-pdf/{batchId}', [AuditoriaSlaController::class, 'exportarPdf'])->name('auditoria-sla.export');
-});
-
-// 👇 NOVAS ROTAS: Módulo de DRE (Cruzamento SLA x E4LOG) 👇
-Route::middleware('auth')->group(function () {
-    Route::post('/dre/confrontar', [DreOperacaoController::class, 'confrontarOperacao'])->name('dre.confrontar');
-    Route::get('/dre/exportar-pdf/{batchDreId}', [DreOperacaoController::class, 'exportarPdf'])->name('dre.exportar');
 });
 
 // Gestão do Perfil

@@ -2,262 +2,338 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>DRE por Operação - Confronto BWT x E4LOG</title>
+    <title>Relatório DRE Operação - BWT x E4LOG</title>
     <style>
+        /* Base e Tipografia otimizadas para PDF (A4 Paisagem) */
+        @page { margin: 1cm; size: A4 landscape; }
+        
         body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            font-size: 9px;
-            color: #1e293b;
+            font-size: 8px; 
+            color: #334155;
             margin: 0;
             padding: 0;
         }
+        
+        /* Cabeçalho */
         .header {
             text-align: center;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 12px;
+            border-bottom: 2px solid #1f2937;
+            padding-bottom: 8px;
         }
         .header h1 {
             margin: 0;
-            font-size: 18px;
-            color: #0f172a;
+            font-size: 15px;
+            color: #111827;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
+            font-weight: 900;
         }
         .header p {
-            margin: 5px 0 0;
+            margin: 4px 0 0 0;
             color: #64748b;
-            font-size: 10px;
+            font-size: 9px;
         }
         
-        /* Painel Executivo */
+        /* Painel Executivo do DRE */
         .panel {
             background-color: #f8fafc;
             border: 1px solid #cbd5e1;
-            border-radius: 6px;
-            padding: 12px;
-            margin-bottom: 20px;
-        }
-        .panel-title {
-            font-size: 12px;
-            font-weight: bold;
-            color: #334155;
-            margin-bottom: 10px;
-            text-transform: uppercase;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 12px;
         }
         .panel-table {
             width: 100%;
             border-collapse: collapse;
         }
         .panel-table td {
+            padding: 4px 8px;
             vertical-align: top;
-            font-size: 11px;
-            line-height: 1.6;
+            border-right: 1px solid #cbd5e1;
         }
-        .highlight-box {
-            background-color: #ffffff;
-            border: 1px solid #e2e8f0;
-            padding: 8px;
-            border-radius: 4px;
-            text-align: center;
-        }
-        .highlight-title {
-            font-size: 9px;
-            color: #64748b;
-            text-transform: uppercase;
-        }
-        .highlight-value {
-            font-size: 14px;
-            font-weight: bold;
-            margin-top: 4px;
+        .panel-table td:last-child {
+            border-right: none;
         }
 
-        /* Cores de Status */
+        /* Cores e Utilitários */
         .text-red { color: #dc2626; }
         .text-green { color: #16a34a; }
-        .text-orange { color: #ea580c; }
         .text-blue { color: #2563eb; }
+        .text-orange { color: #ea580c; }
+        .font-bold { font-weight: bold; }
+        .text-right { text-align: right !important; }
+        .text-center { text-align: center !important; }
         
-        .bg-red { background-color: #fef2f2; color: #991b1b; }
-        .bg-green { background-color: #f0fdf4; color: #166534; }
-        .bg-orange { background-color: #fff7ed; color: #9a3412; }
-
-        /* Tabela de Dados */
-        table.data-table {
+        /* Tipografia de Matemática Quebrada (Idêntica à Imagem) */
+        .val-soma-rec { color: #0284c7; font-weight: bold; font-size: 9.5px; margin-bottom: 2px; }
+        .val-soma-cus { color: #b91c1c; font-weight: bold; font-size: 9.5px; margin-bottom: 2px; }
+        .val-soma-sla { color: #475569; font-weight: bold; font-size: 9.5px; margin-bottom: 2px; }
+        
+        .text-breakdown-frt { color: #94a3b8; font-size: 8px; margin-top: 1px; }
+        .text-breakdown-tde { color: #ea580c; font-size: 8px; margin-top: 1px; font-weight: bold; }
+        .text-compl-orange { color: #ea580c; font-size: 7.5px; font-weight: bold; margin-top: 2px; }
+        
+        /* Badges de Status DRE */
+        .badge {
+            padding: 3px 5px;
+            font-size: 7px;
+            font-weight: bold;
+            border-radius: 3px;
+            display: inline-block;
+            text-transform: uppercase;
+        }
+        .badge-furo { background-color: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+        .badge-alerta { background-color: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }
+        .badge-pendente { background-color: #e0f2fe; color: #1e40af; border: 1px solid #bae6fd; }
+        .badge-validado { background-color: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        
+        /* Tabela Principal */
+        .data-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 10px;
+            margin-top: 5px;
+            table-layout: fixed; 
         }
         .data-table th, .data-table td {
             border: 1px solid #e2e8f0;
-            padding: 6px;
+            padding: 5px;
             text-align: left;
+            vertical-align: middle;
             word-wrap: break-word;
         }
         .data-table th {
             background-color: #f1f5f9;
-            color: #475569;
-            font-weight: bold;
-            font-size: 9px;
-            text-transform: uppercase;
-        }
-        .data-table tr:nth-child(even) {
-            background-color: #f8fafc;
-        }
-        
-        /* Alinhamentos e Colunas */
-        .text-right { text-align: right !important; }
-        .text-center { text-align: center !important; }
-        .font-bold { font-weight: bold; }
-        
-        .col-nfe { width: 18%; }
-        .col-cidade { width: 12%; }
-        .col-regiao { width: 14%; }
-        .col-valor { width: 10%; }
-        .col-lucro { width: 12%; }
-        .col-status { width: 12%; }
-        
-        .badge {
-            padding: 3px 6px;
-            border-radius: 4px;
-            font-size: 8px;
+            color: #334155;
+            font-size: 7.5px;
             font-weight: bold;
             text-transform: uppercase;
-            display: inline-block;
         }
+        .data-table tr:nth-child(even) { background-color: #f8fafc; }
+        
+        /* Larguras das Colunas (Ajustadas para caber TUDO no PDF A4) */
+        .col-nfe { width: 10%; }
+        .col-arquivos { width: 18%; }
+        .col-rec { width: 12%; background-color: #eff6ff; } /* Fundo leve azul para Receita */
+        .col-rec-sla { width: 12%; }
+        .col-cus { width: 12%; background-color: #fef2f2; } /* Fundo leve vermelho para Custo */
+        .col-cus-sla { width: 12%; }
+        .col-dre { width: 14%; background-color: #f1f5f9; }
+        .col-status { width: 10%; }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <h1>Demonstração do Resultado por Operação (DRE)</h1>
-        <p>Cruzamento de Receita (BWT/Sol Fácil) versus Custos (E4LOG) | Gerado em: {{ $data_auditoria }}</p>
+        <h1>DRE OPERACIONAL: CONFRONTO BWT (RECEITA) x E4LOG (CUSTO)</h1>
+        <p>Extraído e Gerado em: {{ $data_auditoria }}</p>
     </div>
 
     <!-- PAINEL EXECUTIVO -->
     <div class="panel">
-        <div class="panel-title">Resumo Financeiro Consolidado</div>
         <table class="panel-table">
             <tr>
-                <td style="width: 33%; padding-right: 10px;">
-                    <div class="highlight-box">
-                        <div class="highlight-title">Total de Cargas Cruzadas</div>
-                        <div class="highlight-value text-blue">{{ $resumo['qtd_match'] }} NF-es</div>
-                    </div>
+                <!-- Alertas -->
+                <td style="width: 25%;">
+                    <div style="font-size: 8px; color: #64748b; text-transform: uppercase; font-weight: bold;">Alertas & Divergências</div>
+                    <div style="font-size: 16px; font-weight: 900; color: #ea580c; margin-top: 2px;">{{ $resumo['qtd_alertas'] }} Entregas</div>
+                    <div style="font-size: 8px; color: #94a3b8; margin-top: 2px;">Com divergência ou furo de receita</div>
                 </td>
-                <td style="width: 33%; padding-right: 10px;">
-                    <div class="highlight-box">
-                        <div class="highlight-title">Receita Total (Faturado Sol Fácil)</div>
-                        <div class="highlight-value text-green">R$ {{ number_format($resumo['total_receita'], 2, ',', '.') }}</div>
-                    </div>
+                
+                <!-- Receita BWT -->
+                <td style="width: 25%;">
+                    <div style="font-size: 8px; color: #1e40af; text-transform: uppercase; font-weight: bold;">Receita Total (BWT)</div>
+                    <div style="font-size: 16px; font-weight: 900; color: #2563eb; margin-top: 2px;">R$ {{ number_format($resumo['total_receita_real'], 2, ',', '.') }}</div>
+                    <div style="font-size: 8px; color: #3b82f6; margin-top: 2px; font-weight: bold;">Ideal SLA: R$ {{ number_format($resumo['total_receita_ideal'], 2, ',', '.') }}</div>
                 </td>
-                <td style="width: 34%;">
-                    <div class="highlight-box">
-                        <div class="highlight-title">Custo Total (Pago E4LOG)</div>
-                        <div class="highlight-value text-red">R$ {{ number_format($resumo['total_custo'], 2, ',', '.') }}</div>
-                    </div>
+                
+                <!-- Custo E4LOG -->
+                <td style="width: 25%;">
+                    <div style="font-size: 8px; color: #991b1b; text-transform: uppercase; font-weight: bold;">Custo Total (E4LOG)</div>
+                    <div style="font-size: 16px; font-weight: 900; color: #dc2626; margin-top: 2px;">R$ {{ number_format($resumo['total_custo_real'], 2, ',', '.') }}</div>
+                    <div style="font-size: 8px; color: #ef4444; margin-top: 2px; font-weight: bold;">Ideal SLA: R$ {{ number_format($resumo['total_custo_ideal'], 2, ',', '.') }}</div>
                 </td>
-            </tr>
-        </table>
-        
-        <table class="panel-table" style="margin-top: 10px;">
-            <tr>
-                <td style="width: 50%;">
-                    <strong>Indicadores de Saúde da Operação:</strong><br>
-                    <span class="text-green font-bold">✔ Operações Lucrativas:</span> {{ $resumo['qtd_lucro'] }} entregas<br>
-                    <span class="text-red font-bold">✖ Operações em Prejuízo:</span> {{ $resumo['qtd_prejuizo'] }} entregas
-                </td>
-                <td style="width: 50%; text-align: right;">
-                    <div style="font-size: 14px;">
-                        <strong>Lucro Bruto Líquido (Spread):</strong> 
-                        <span class="{{ $resumo['lucro_bruto'] < 0 ? 'text-red' : 'text-green' }} font-bold" style="font-size: 16px;">
-                            R$ {{ number_format($resumo['lucro_bruto'], 2, ',', '.') }}
-                        </span>
+                
+                <!-- Spread Bruto -->
+                <td style="width: 25%;">
+                    <div style="font-size: 8px; color: #334155; text-transform: uppercase; font-weight: bold;">Spread Bruto Real (DRE)</div>
+                    <div style="font-size: 16px; font-weight: 900; color: {{ $resumo['lucro_bruto_real'] < 0 ? '#dc2626' : '#059669' }}; margin-top: 2px;">
+                        R$ {{ number_format($resumo['lucro_bruto_real'], 2, ',', '.') }}
                     </div>
-                    @php
-                        $margemGeral = $resumo['total_receita'] > 0 ? ($resumo['lucro_bruto'] / $resumo['total_receita']) * 100 : 0;
-                    @endphp
-                    <div style="color: #64748b; margin-top: 5px; font-size: 11px;">
-                        Margem Geral da Operação: <strong>{{ round($margemGeral, 2) }}%</strong>
-                    </div>
+                    <div style="font-size: 8px; color: #64748b; margin-top: 2px; font-weight: bold;">Ideal SLA: R$ {{ number_format($resumo['lucro_bruto_ideal'], 2, ',', '.') }}</div>
                 </td>
             </tr>
         </table>
     </div>
 
-    <!-- TABELA DE DRE (NOTA A NOTA) -->
+    <!-- TABELA DRE (CRUZAMENTO) -->
     <table class="data-table">
         <thead>
             <tr>
-                <th class="col-nfe">NF-e (PAINEL SOLAR)</th>
-                <th class="col-cidade">DESTINO</th>
-                <th class="col-regiao">MATRIZ (RECEITA X CUSTO)</th>
-                <th class="col-valor text-right">RECEITA BWT</th>
-                <th class="col-valor text-right">CUSTO E4LOG</th>
-                <th class="col-lucro text-right">LUCRO BRUTO (R$)</th>
-                <th class="col-status text-center">STATUS / MARGEM</th>
+                <th class="col-nfe">DADOS DA CARGA</th>
+                <th class="col-arquivos">ARQUIVOS ASSOCIADOS</th>
+                <th class="col-rec text-right">REC. BWT (REAL)</th>
+                <th class="col-rec-sla text-right">REC. SLA (MATRIZ)</th>
+                <th class="col-cus text-right">CUSTO E4LOG (REAL)</th>
+                <th class="col-cus-sla text-right">CUSTO SLA (MATRIZ)</th>
+                <th class="col-dre text-right">SPREAD (LUCRO)</th>
+                <th class="col-status text-center">STATUS</th>
             </tr>
         </thead>
         <tbody>
-            @foreach ($dados as $item)
-                @php
-                    $isPrejuizo = $item['lucro_bruto'] < 0;
-                    $isMargemBaixa = $item['status'] === 'MARGEM BAIXA';
-                    
-                    if ($isPrejuizo) {
-                        $rowColor = 'bg-red';
-                        $valorColor = 'text-red';
-                        $badgeClass = 'bg-red';
-                    } elseif ($isMargemBaixa) {
-                        $rowColor = '';
-                        $valorColor = 'text-orange';
-                        $badgeClass = 'bg-orange';
-                    } else {
-                        $rowColor = '';
-                        $valorColor = 'text-green';
-                        $badgeClass = 'bg-green';
-                    }
-                @endphp
-                <tr class="{{ $rowColor }}">
+            @foreach ($dados as $dre)
+                <tr>
+                    <!-- 1. DADOS DA CARGA -->
                     <td>
-                        <strong style="font-size: 8px;">{{ $item['chave_nfe'] }}</strong>
-                        <div style="font-size: 7px; color: #94a3b8; margin-top: 3px;">
-                            SLA: {{ Str::limit($item['arquivo_bwt'], 20) }}<br>
-                            E4L: {{ Str::limit($item['arquivo_e4log'], 20) }}
+                        <strong style="color: #0f172a; font-size: 9px; word-break: break-all;">NFe: {{ $dre['chave_nfe'] }}</strong>
+                        <div style="font-size: 7.5px; color: #475569; margin-top: 4px; line-height: 1.3;">
+                            <span class="font-bold">Destino:</span> {{ $dre['cidade'] }}<br>
+                            <span class="font-bold">V. Carga:</span> R$ {{ number_format($dre['valor_carga'], 2, ',', '.') }}<br>
+                            <span class="font-bold">TDE:</span> <span class="{{ $dre['tem_tde'] === 'Sim' ? 'text-green font-bold' : '' }}">{{ $dre['tem_tde'] }}</span>
                         </div>
                     </td>
-                    <td class="font-bold">{{ $item['cidade'] }}</td>
+
+                    <!-- 2. ARQUIVOS (COM COMPLEMENTOS EM LARANJA) -->
                     <td>
-                        <div style="color: #16a34a; font-size: 8px; margin-bottom: 2px;">Venda: {{ $item['regiao_venda'] }}</div>
-                        <div style="color: #dc2626; font-size: 8px;">Custo: {{ $item['regiao_custo'] }}</div>
+                        <!-- Receita BWT -->
+                        @if($dre['arquivo_bwt'] !== 'NÃO LOCALIZADO NO LOTE (FURO DE RECEITA)')
+                            <div style="color: #1d4ed8; font-size: 7.5px; word-break: break-all; margin-bottom: 2px;">
+                                <strong>BWT:</strong> {{ $dre['arquivo_bwt'] }}
+                            </div>
+                            @if(!empty($dre['arquivos_bwt_compl']))
+                                <div style="margin-bottom: 4px;">
+                                    <span style="font-size: 6.5px; color: #ea580c; font-weight: bold;">+ COMPL. BWT:</span>
+                                    @foreach($dre['arquivos_bwt_compl'] as $comp)
+                                        <div class="text-compl-orange" style="word-break: break-all;">{{ $comp }}</div>
+                                    @endforeach
+                                </div>
+                            @endif
+                        @else
+                            <div style="margin-bottom: 6px;"><span style="background-color:#fee2e2; color:#991b1b; padding:2px; font-size:6.5px; font-weight:bold; border-radius:2px;">BWT NÃO LOCALIZADA</span></div>
+                        @endif
+
+                        <div style="border-top: 1px dashed #cbd5e1; margin: 4px 0;"></div>
+
+                        <!-- Custo E4LOG -->
+                        @if($dre['arquivo_e4log'] !== 'CUSTO PENDENTE')
+                            <div style="color: #b91c1c; font-size: 7.5px; word-break: break-all; margin-bottom: 2px;">
+                                <strong>E4L:</strong> {{ $dre['arquivo_e4log'] }}
+                            </div>
+                            @if(!empty($dre['arquivos_e4log_compl']))
+                                <div>
+                                    <span style="font-size: 6.5px; color: #ea580c; font-weight: bold;">+ COMPL. E4LOG:</span>
+                                    @foreach($dre['arquivos_e4log_compl'] as $comp)
+                                        <div class="text-compl-orange" style="word-break: break-all;">{{ $comp }}</div>
+                                    @endforeach
+                                </div>
+                            @endif
+                        @else
+                            <div><span style="background-color:#e0f2fe; color:#1e40af; padding:2px; font-size:6.5px; font-weight:bold; border-radius:2px;">E4LOG PENDENTE</span></div>
+                        @endif
                     </td>
-                    <td class="text-right font-bold" style="color: #166534;">
-                        R$ {{ number_format($item['receita_bwt'], 2, ',', '.') }}
+
+                    <!-- 3. RECEITA BWT (FATURADO REAL) -->
+                    <td class="text-right" style="background-color: #eff6ff;">
+                        <div style="font-size: 7px; color: #1e40af; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">{{ $dre['receita']['matriz'] }}</div>
+                        <div class="val-soma-rec">
+                            R$ {{ number_format($dre['receita']['real'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-frt">
+                            Frt: R$ {{ number_format($dre['receita']['real_frete'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-tde">
+                            TDE: R$ {{ number_format($dre['receita']['real_tde'], 2, ',', '.') }}
+                        </div>
                     </td>
-                    <td class="text-right font-bold" style="color: #991b1b;">
-                        R$ {{ number_format($item['custo_e4log'], 2, ',', '.') }}
+
+                    <!-- 4. RECEITA SLA MATRIZ -->
+                    <td class="text-right">
+                        <div style="font-size: 7px; color: #64748b; font-weight: bold; margin-bottom: 4px;">SLA CONTRATUAL</div>
+                        <div class="val-soma-sla">
+                            R$ {{ number_format($dre['receita']['ideal'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-frt">
+                            Frt: R$ {{ number_format($dre['receita']['ideal_frete'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-tde">
+                            TDE: R$ {{ number_format($dre['receita']['ideal_tde'], 2, ',', '.') }}
+                        </div>
+                        
+                        @php $recDiff = round($dre['receita']['diferenca'], 2); @endphp
+                        @if($recDiff != 0)
+                            <div style="margin-top: 4px; font-size: 7px; font-weight: bold; color: {{ $recDiff > 0 ? '#16a34a' : '#dc2626' }};">
+                                Desvio: {{ $recDiff > 0 ? '+' : '' }}R$ {{ number_format($recDiff, 2, ',', '.') }}
+                            </div>
+                        @endif
                     </td>
-                    <td class="text-right font-bold {{ $valorColor }}">
-                        {{ $isPrejuizo ? '-' : '+' }} R$ {{ number_format(abs($item['lucro_bruto']), 2, ',', '.') }}
+
+                    <!-- 5. CUSTO E4LOG (PAGO REAL) -->
+                    <td class="text-right" style="background-color: #fef2f2;">
+                        <div style="font-size: 7px; color: #991b1b; font-weight: bold; margin-bottom: 4px; text-transform: uppercase;">{{ $dre['custo']['matriz'] }}</div>
+                        <div class="val-soma-cus">
+                            R$ {{ number_format($dre['custo']['real'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-frt">
+                            Frt: R$ {{ number_format($dre['custo']['real_frete'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-tde">
+                            TDE: R$ {{ number_format($dre['custo']['real_tde'], 2, ',', '.') }}
+                        </div>
                     </td>
+
+                    <!-- 6. CUSTO SLA MATRIZ -->
+                    <td class="text-right">
+                        <div style="font-size: 7px; color: #64748b; font-weight: bold; margin-bottom: 4px;">SLA CONTRATUAL</div>
+                        <div class="val-soma-sla">
+                            R$ {{ number_format($dre['custo']['ideal'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-frt">
+                            Frt: R$ {{ number_format($dre['custo']['ideal_frete'], 2, ',', '.') }}
+                        </div>
+                        <div class="text-breakdown-tde">
+                            TDE: R$ {{ number_format($dre['custo']['ideal_tde'], 2, ',', '.') }}
+                        </div>
+
+                        @php $cusDiff = round($dre['custo']['diferenca'], 2) * -1; @endphp
+                        @if($cusDiff != 0)
+                            <div style="margin-top: 4px; font-size: 7px; font-weight: bold; color: {{ $cusDiff > 0 ? '#16a34a' : '#dc2626' }};">
+                                Desvio: {{ $cusDiff > 0 ? '+' : '' }}R$ {{ number_format($cusDiff, 2, ',', '.') }}
+                            </div>
+                        @endif
+                    </td>
+
+                    <!-- 7. SPREAD / LUCRO DRE -->
+                    <td class="text-right" style="background-color: #f1f5f9;">
+                        @php $lucro = round($dre['dre']['lucro_real'], 2); @endphp
+                        <div style="font-size: 11px; font-weight: 900; color: {{ $lucro < 0 ? '#dc2626' : '#059669' }}; margin-bottom: 3px;">
+                            {{ $lucro > 0 ? '+' : '' }} R$ {{ number_format($lucro, 2, ',', '.') }}
+                        </div>
+                        <div style="font-size: 8px; color: #475569; font-weight: bold;">
+                            Margem: <span style="color: {{ $dre['dre']['margem_real'] < 0 ? '#dc2626' : '#059669' }}">{{ number_format($dre['dre']['margem_real'], 2, ',', '.') }}%</span>
+                        </div>
+                        
+                        <div style="margin-top: 4px; border-top: 1px dashed #cbd5e1; padding-top: 3px; font-size: 7px; color: #64748b;">
+                            Spread Ideal: <br>
+                            <strong>R$ {{ number_format($dre['dre']['lucro_ideal'], 2, ',', '.') }}</strong>
+                        </div>
+                    </td>
+
+                    <!-- 8. STATUS -->
                     <td class="text-center">
+                        @php
+                            $badgeClass = 'badge-validado';
+                            if ($dre['status'] === 'PREJUÍZO DRE' || $dre['status'] === 'FURO DE RECEITA') $badgeClass = 'badge-furo';
+                            elseif ($dre['status'] === 'DIVERGÊNCIA') $badgeClass = 'badge-alerta';
+                            elseif ($dre['status'] === 'CUSTO PENDENTE') $badgeClass = 'badge-pendente';
+                        @endphp
+                        
                         <span class="badge {{ $badgeClass }}">
-                            {{ $item['status'] }}
+                            {{ $dre['status'] }}
                         </span>
-                        <div class="font-bold" style="margin-top: 3px; font-size: 10px;">
-                            {{ $item['margem_pct'] }}%
-                        </div>
                     </td>
                 </tr>
             @endforeach
-            
-            @if(count($dados) === 0)
-                <tr>
-                    <td colspan="7" class="text-center" style="padding: 20px; color: #64748b;">
-                        Nenhuma operação correspondente (Match por NF-e) foi encontrada entre os lotes.
-                    </td>
-                </tr>
-            @endif
         </tbody>
     </table>
 

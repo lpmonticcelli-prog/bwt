@@ -44,31 +44,42 @@ class DreOperacaoController extends Controller
         foreach ($dadosSla as $sla) {
             $chaveNfe = $sla['chave_nfe'] ?? null;
             
-            // Separação de Receita Real (Se não existir, cai pro total)
+            // Separação de Receita Real (Faturado)
             $recValorFaturado = (float) ($sla['valor_cobrado'] ?? 0);
-            $recFreteCobrado = (float) ($sla['valor_frete_cobrado'] ?? $recValorFaturado);
-            $recTdeCobrado = (float) ($sla['valor_tde_cobrado'] ?? 0);
-            $recValorIdeal = (float) ($sla['valor_sla'] ?? 0);
+            $recFreteCobrado  = (float) ($sla['valor_frete_cobrado'] ?? $recValorFaturado);
+            $recTdeCobrado    = (float) ($sla['valor_tde_cobrado'] ?? 0);
             
-            // E4LOG (Custo)
+            // Separação de Receita Ideal (SLA MATRIZ)
+            $recValorIdeal    = (float) ($sla['valor_sla'] ?? 0);
+            $recFreteIdeal    = (float) ($sla['valor_frete_sla'] ?? $recValorIdeal);
+            $recTdeIdeal      = (float) ($sla['valor_tde_sla'] ?? 0);
+            
+            // E4LOG (Custo Inicial Zerado)
             $cusMatriz = '-'; $cusFaturada = '-';
-            $cusValorCobrado = 0; $cusValorIdeal = 0; $cusDiferenca = 0;
-            $cusFreteCobrado = 0; $cusTdeCobrado = 0;
+            $cusValorCobrado = 0; $cusFreteCobrado = 0; $cusTdeCobrado = 0;
+            $cusValorIdeal = 0;   $cusFreteIdeal = 0;   $cusTdeIdeal = 0;
+            $cusDiferenca = 0;
             
             $arquivoE4log = 'CUSTO PENDENTE';
             $arquivosE4logCompl = [];
 
+            // Se achou correspondência no Custo (Match)
             if ($chaveNfe && isset($custosE4logIndexados[$chaveNfe])) {
                 $e4log = $custosE4logIndexados[$chaveNfe];
                 
                 $cusMatriz = $e4log['regiao_sistema'] ?? '-';
                 $cusFaturada = ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')';
                 
+                // Custo Real (Cobrado E4log)
                 $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
                 $cusFreteCobrado = (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado);
                 $cusTdeCobrado   = (float) ($e4log['valor_tde_cobrado'] ?? 0);
                 
-                $cusValorIdeal = (float) ($e4log['valor_sla'] ?? 0);
+                // Custo Ideal (SLA Matriz E4log)
+                $cusValorIdeal   = (float) ($e4log['valor_sla'] ?? 0);
+                $cusFreteIdeal   = (float) ($e4log['valor_frete_sla'] ?? $cusValorIdeal);
+                $cusTdeIdeal     = (float) ($e4log['valor_tde_sla'] ?? 0);
+                
                 $cusDiferenca = (float) ($e4log['diferenca'] ?? 0);
                 
                 $arquivoE4log = $e4log['arquivo'] ?? '-';
@@ -96,21 +107,33 @@ class DreOperacaoController extends Controller
                 'cidade'        => $sla['cidade_destino'] ?? 'Desconhecida',
                 'valor_carga'   => $sla['valor_carga'] ?? 0,
                 'tem_tde'       => $sla['tem_tde'] ?? 'Não',
-                // Arquivos e Complementos
+                
                 'arquivo_bwt'        => $sla['arquivo'] ?? '-',
                 'arquivos_bwt_compl' => $sla['arquivos_complemento'] ?? [],
                 'arquivo_e4log'        => $arquivoE4log,
                 'arquivos_e4log_compl' => $arquivosE4logCompl,
                 
                 'receita' => [
-                    'matriz' => $sla['regiao_sistema'] ?? '-', 'faturada' => ($sla['regiao_faturada'] ?? '-') . ' (' . ($sla['percentual_faturado'] ?? '-') . ')',
-                    'real' => $recValorFaturado, 'real_frete' => $recFreteCobrado, 'real_tde' => $recTdeCobrado,
-                    'ideal' => $recValorIdeal, 'diferenca' => (float) ($sla['diferenca'] ?? 0)
+                    'matriz'      => $sla['regiao_sistema'] ?? '-', 
+                    'faturada'    => ($sla['regiao_faturada'] ?? '-') . ' (' . ($sla['percentual_faturado'] ?? '-') . ')',
+                    'real'        => $recValorFaturado, 
+                    'real_frete'  => $recFreteCobrado, 
+                    'real_tde'    => $recTdeCobrado,
+                    'ideal'       => $recValorIdeal, 
+                    'ideal_frete' => $recFreteIdeal, 
+                    'ideal_tde'   => $recTdeIdeal,
+                    'diferenca'   => (float) ($sla['diferenca'] ?? 0)
                 ],
                 'custo' => [
-                    'matriz' => $cusMatriz, 'faturada' => $cusFaturada,
-                    'real' => $cusValorCobrado, 'real_frete' => $cusFreteCobrado, 'real_tde' => $cusTdeCobrado,
-                    'ideal' => $cusValorIdeal, 'diferenca' => $cusDiferenca
+                    'matriz'      => $cusMatriz, 
+                    'faturada'    => $cusFaturada,
+                    'real'        => $cusValorCobrado, 
+                    'real_frete'  => $cusFreteCobrado, 
+                    'real_tde'    => $cusTdeCobrado,
+                    'ideal'       => $cusValorIdeal, 
+                    'ideal_frete' => $cusFreteIdeal, 
+                    'ideal_tde'   => $cusTdeIdeal,
+                    'diferenca'   => $cusDiferenca
                 ],
                 'dre' => [
                     'lucro_real' => $lucroReal, 'lucro_ideal' => $lucroIdeal, 'margem_real' => round($margemRealPct, 2),
@@ -119,10 +142,15 @@ class DreOperacaoController extends Controller
             ];
         }
 
-        // 2. FUROS DE FATURAMENTO
+        // 2. FUROS DE FATURAMENTO (Custos E4LOG que não têm receita na BWT)
         foreach ($custosE4logIndexados as $chaveNfe => $e4log) {
             $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
-            $cusValorIdeal = (float) ($e4log['valor_sla'] ?? 0);
+            $cusFreteCobrado = (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado);
+            $cusTdeCobrado   = (float) ($e4log['valor_tde_cobrado'] ?? 0);
+            
+            $cusValorIdeal   = (float) ($e4log['valor_sla'] ?? 0);
+            $cusFreteIdeal   = (float) ($e4log['valor_frete_sla'] ?? $cusValorIdeal);
+            $cusTdeIdeal     = (float) ($e4log['valor_tde_sla'] ?? 0);
             
             $resumo['total_custo_real'] += $cusValorCobrado; $resumo['lucro_bruto_real'] -= $cusValorCobrado;
             $resumo['total_custo_ideal'] += $cusValorIdeal;  $resumo['lucro_bruto_ideal'] -= $cusValorIdeal;
@@ -138,12 +166,21 @@ class DreOperacaoController extends Controller
                 'arquivo_e4log'        => $e4log['arquivo'] ?? '-',
                 'arquivos_e4log_compl' => $e4log['arquivos_complemento'] ?? [],
                 'receita' => [
-                    'matriz' => 'FURO', 'faturada' => '-', 'real' => 0, 'real_frete' => 0, 'real_tde' => 0, 'ideal' => 0, 'diferenca' => 0
+                    'matriz' => 'FURO', 'faturada' => '-', 
+                    'real' => 0, 'real_frete' => 0, 'real_tde' => 0, 
+                    'ideal' => 0, 'ideal_frete' => 0, 'ideal_tde' => 0, 
+                    'diferenca' => 0
                 ],
                 'custo' => [
-                    'matriz' => $e4log['regiao_sistema'] ?? '-', 'faturada' => ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')',
-                    'real' => $cusValorCobrado, 'real_frete' => (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado), 'real_tde' => (float) ($e4log['valor_tde_cobrado'] ?? 0),
-                    'ideal' => $cusValorIdeal, 'diferenca' => (float) ($e4log['diferenca'] ?? 0)
+                    'matriz'      => $e4log['regiao_sistema'] ?? '-', 
+                    'faturada'    => ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')',
+                    'real'        => $cusValorCobrado, 
+                    'real_frete'  => $cusFreteCobrado, 
+                    'real_tde'    => $cusTdeCobrado,
+                    'ideal'       => $cusValorIdeal, 
+                    'ideal_frete' => $cusFreteIdeal, 
+                    'ideal_tde'   => $cusTdeIdeal,
+                    'diferenca'   => (float) ($e4log['diferenca'] ?? 0)
                 ],
                 'dre' => [
                     'lucro_real' => -$cusValorCobrado, 'lucro_ideal' => -$cusValorIdeal, 'margem_real' => -100,
