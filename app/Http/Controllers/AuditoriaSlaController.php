@@ -17,118 +17,162 @@ class AuditoriaSlaController extends Controller
 
     public function processar(Request $request)
     {
+        // 1. Blindagem de Memória e Tempo para aguentar milhares de arquivos
+        ini_set('max_execution_time', 0);
+        ini_set('memory_limit', '2G');
+
         $request->validate([
-            'files.*' => 'required|file|mimes:xml',
+                'file_zip' => 'required|file|mimes:zip',
         ]);
 
         $batchId = $request->input('batch_id', Str::uuid()->toString());
         $resultadosAtuais = [];
 
-        if ($request->hasFile('files')) {
-            foreach ($request->file('files') as $file) {
-                
-                $xmlContent = file_get_contents($file->getPathname());
-                $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
-                $xmlObj = simplexml_load_string($xmlContent);
-                $data = json_decode(json_encode($xmlObj), true);
+        // 2. Lógica de Extração do ZIP
+        if ($request->hasFile('file_zip')) {
+            $zip = new \ZipArchive;
+            $zipFile = $request->file('file_zip')->getPathname();
 
-                $nomeArquivo = Str::limit($file->getClientOriginalName(), 250, '');
+            if ($zip->open($zipFile) === true) {
+                // Cria pasta temporária única
+                $tempDir = storage_path('app/temp_xml_sla_' . uniqid());
+                \Illuminate\Support\Facades\File::makeDirectory($tempDir, 0755, true);
                 
-                $cidadeDestino = $this->extractCity($data);
-                $valorCarga = $this->extractInvoiceValue($data);
-                $valorCobradoOriginal = $this->extractFreightValue($data);
-                
-                $observacoesTexto = $this->extractObs($data);
-                $tipoCTe = $this->extractTipoCTe($data);
-                $temTde = $this->verificarTde($data, $observacoesTexto, $tipoCTe);
-                $tipoOperacao = $this->extractTipoOperacao($observacoesTexto, $tipoCTe);
-                
-                $chaveCte = $this->extractChaveCTe($data, $nomeArquivo);
-                $chaveOriginal = $this->extractChaveOriginal($data);
-                
-                $regiaoFaturadaData = $this->descobrirRegiaoFaturada($observacoesTexto, $valorCarga, $valorCobradoOriginal, $temTde, $tipoOperacao);
+                // Extrai os XMLs
+                $zip->extractTo($tempDir);
+                $zip->close();
 
-                // Previne falha fatal caso o XML não tenha cidade
-                if (!$cidadeDestino) {
-                    $cidadeDestino = 'Desconhecida'; 
-                }
+                // Busca todos os arquivos extraídos (mesmo que estejam dentro de subpastas no ZIP)
+                $files = \Illuminate\Support\Facades\File::allFiles($tempDir);
 
-                // 1. BUSCA DA TABELA OFICIAL
-                $nomeRegiao = $this->getRegiaoPorCidade($cidadeDestino);
+                foreach ($files as $file) {
+                    // Ignora arquivos que não sejam XML
+                    if (strtolower($file->getExtension()) !== 'xml') continue;
 
-                // 👇 FALLBACK INTELIGENTE (AUDITORIA 100%) 👇
-                // Se a cidade não existir no mapa, o sistema autocompleta inferindo a regra cobrada no CT-e
-                if ($nomeRegiao === '-') {
-                    $regFat = strtolower($regiaoFaturadaData['nome']);
-                    if (str_contains($regFat, '1')) $nomeRegiao = 'Região 1';
-                    elseif (str_contains($regFat, '2')) $nomeRegiao = 'Região 2';
-                    elseif (str_contains($regFat, '3')) $nomeRegiao = 'Região 3';
-                    elseif (str_contains($regFat, '4')) $nomeRegiao = 'Região 4';
-                    else $nomeRegiao = 'Região 1'; // Padrão se não conseguir descobrir
+                    // Lê o XML e processa
+                    $xmlContent = file_get_contents($file->getPathname());
+                    $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
+                    $xmlObj = simplexml_load_string($xmlContent);
                     
-                    $nomeRegiao .= ' (Auto)';
-                }
-
-                $regiaoStr = strtolower($nomeRegiao);
-                $minimo = 0; $percentual = 0;
-
-                // 2. APLICAÇÃO DAS REGRAS BWT -> SOL FÁCIL
-                if (str_contains($regiaoStr, '1')) { $minimo = 350.00; $percentual = 0.03; } 
-                elseif (str_contains($regiaoStr, '2')) { $minimo = 350.00; $percentual = 0.035; } 
-                elseif (str_contains($regiaoStr, '3')) { $minimo = 550.00; $percentual = 0.04; } 
-                elseif (str_contains($regiaoStr, '4')) { $minimo = 600.00; $percentual = 0.05; } 
-
-                if ($tipoOperacao === 'Complemento') {
-                    $freteBase = 0; 
-                } else {
-                    $freteCalculado = $valorCarga * $percentual;
-                    $freteBase = max($minimo, $freteCalculado);
-                }
-
-                // REGRAS DA TDE ATUALIZADAS
-                $valorTde = $temTde ? (($freteBase > 666.67) ? ($freteBase * 0.30) : 200.00) : 0;
-                
-                // ICMS a 12% por dentro (Apenas no frete base, TDE não tem ICMS)
-                $freteComIcms = $freteBase / 0.88;
-                $valorSlaCorreto = $freteComIcms + $valorTde;
-
-                $diferenca = $valorSlaCorreto - $valorCobradoOriginal;
-                
-                $motivo = round($diferenca, 2) != 0 ? ($diferenca > 0 ? 'Deixamos de faturar (Perda de margem).' : 'Faturado indevidamente a maior.') : '-';
-
-                // --- INJEÇÕES DRE ---
-                $chaveNfe = $this->extractChaveNFe($data);
-                $localDestino = $this->extractCityAndUf($data);
-                if ($localDestino['uf'] !== 'SP' && $localDestino['uf'] !== '') {
-                    $cidadeDestino = $cidadeDestino . ' - ' . $localDestino['uf'];
-                }
-                // --------------------
-
-                $resultadosAtuais[] = [
-                    'chave_cte' => $chaveCte,
-                    'chave_nfe' => $chaveNfe, // Injetado para DRE
-                    'arquivo' => $nomeArquivo,
-                    'cidade_destino' => $cidadeDestino,
-                    'regiao_sistema' => $nomeRegiao,
-                    'percentual_sistema' => ($percentual > 0) ? ($percentual * 100) . '%' : '-',
-                    'regiao_faturada' => $regiaoFaturadaData['nome'],
-                    'percentual_faturado' => $regiaoFaturadaData['pct'],
-                    'tem_tde' => $temTde ? 'Sim' : 'Não',
-                    'tipo_operacao' => $tipoOperacao,
-                    'chave_original' => $chaveOriginal,
-                    'valor_carga' => (float) $valorCarga,
-                    'valor_cobrado' => (float) $valorCobradoOriginal,
+                    if (!$xmlObj) continue; // Pula XML corrompido para não travar
                     
-                    // --- SEPARAÇÃO DE VALORES (FRETE VS TDE) ---
-                    'valor_frete_cobrado' => $tipoOperacao === 'Complemento' ? 0 : (float) $valorCobradoOriginal,
-                    'valor_tde_cobrado'   => $tipoOperacao === 'Complemento' ? (float) $valorCobradoOriginal : 0,
-                    // -------------------------------------------
+                    $data = json_decode(json_encode($xmlObj), true);
+                    $nomeArquivo = Str::limit($file->getFilename(), 250, '');
                     
-                    'valor_sla' => (float) $valorSlaCorreto,
-                    'diferenca' => (float) $diferenca,
-                    'status' => round($diferenca, 2) == 0 ? 'Validado' : 'Divergente',
-                    'motivo' => $motivo 
-                ];
+                    $cidadeDestino = $this->extractCity($data);
+                    $valorCarga = $this->extractInvoiceValue($data);
+                    
+                    $observacoesTexto = $this->extractObs($data);
+                    $tipoCTe = $this->extractTipoCTe($data);
+                    $temTde = $this->verificarTde($data, $observacoesTexto, $tipoCTe);
+                    $tipoOperacao = $this->extractTipoOperacao($observacoesTexto, $tipoCTe);
+                    
+                    // --- EXTRAÇÃO INTELIGENTE DE VALORES FATURADOS ---
+                    $valoresFaturados = $this->extractValoresXML($data, $tipoOperacao);
+                    $valorCobradoOriginal = $valoresFaturados['total'];
+                    $valorFreteCobrado    = $valoresFaturados['frete'];
+                    $valorTdeCobrado      = $valoresFaturados['tde'];
+                    
+                    $chaveCte = $this->extractChaveCTe($data, $nomeArquivo);
+                    $chaveOriginal = $this->extractChaveOriginal($data);
+                    
+                    $regiaoFaturadaData = $this->descobrirRegiaoFaturada($observacoesTexto, $valorCarga, $valorCobradoOriginal, $temTde, $tipoOperacao);
+
+                    // Previne falha fatal caso o XML não tenha cidade
+                    if (!$cidadeDestino) {
+                        $cidadeDestino = 'Desconhecida'; 
+                    }
+
+                    // 1. BUSCA DA TABELA OFICIAL
+                    $nomeRegiao = $this->getRegiaoPorCidade($cidadeDestino);
+
+                    // 👇 FALLBACK INTELIGENTE (AUDITORIA 100%) 👇
+                    if ($nomeRegiao === '-') {
+                        $regFat = strtolower($regiaoFaturadaData['nome']);
+                        if (str_contains($regFat, '1')) $nomeRegiao = 'Região 1';
+                        elseif (str_contains($regFat, '2')) $nomeRegiao = 'Região 2';
+                        elseif (str_contains($regFat, '3')) $nomeRegiao = 'Região 3';
+                        elseif (str_contains($regFat, '4')) $nomeRegiao = 'Região 4';
+                        else $nomeRegiao = 'Região 1'; // Padrão se não conseguir descobrir
+                        
+                        $nomeRegiao .= ' (Auto)';
+                    }
+
+                    $regiaoStr = strtolower($nomeRegiao);
+                    $minimo = 0; $percentual = 0;
+
+                    // 2. APLICAÇÃO DAS REGRAS BWT -> SOL FÁCIL
+                    if (str_contains($regiaoStr, '1')) { $minimo = 350.00; $percentual = 0.03; } 
+                    elseif (str_contains($regiaoStr, '2')) { $minimo = 350.00; $percentual = 0.035; } 
+                    elseif (str_contains($regiaoStr, '3')) { $minimo = 550.00; $percentual = 0.04; } 
+                    elseif (str_contains($regiaoStr, '4')) { $minimo = 600.00; $percentual = 0.05; } 
+
+                    // --- MATEMÁTICA SLA SEPARADA ---
+                    if ($tipoOperacao === 'Complemento') {
+                        $freteBase = 0;
+                        $valorFreteSla = 0;
+                        $valorTdeSla = 0;
+                        $valorSlaCorreto = 0;
+                    } else {
+                        $freteCalculado = $valorCarga * $percentual;
+                        $freteBase = max($minimo, $freteCalculado);
+                        
+                        // REGRAS DA TDE ATUALIZADAS
+                        $valorTde = $temTde ? (($freteBase > 666.67) ? ($freteBase * 0.30) : 200.00) : 0;
+                        
+                        // ICMS a 12% por dentro (Apenas no frete base)
+                        $freteComIcms = $freteBase / 0.88;
+                        
+                        $valorFreteSla = $freteComIcms;
+                        $valorTdeSla = $valorTde;
+                        $valorSlaCorreto = $freteComIcms + $valorTde;
+                    }
+
+                    $diferenca = $valorSlaCorreto - $valorCobradoOriginal;
+                    $motivo = round($diferenca, 2) != 0 ? ($diferenca > 0 ? 'Deixamos de faturar (Perda de margem).' : 'Faturado indevidamente a maior.') : '-';
+
+                    // --- INJEÇÕES DRE ---
+                    $chaveNfe = $this->extractChaveNFe($data);
+                    $localDestino = $this->extractCityAndUf($data);
+                    if ($localDestino['uf'] !== 'SP' && $localDestino['uf'] !== '') {
+                        $cidadeDestino = $cidadeDestino . ' - ' . $localDestino['uf'];
+                    }
+
+                    $resultadosAtuais[] = [
+                        'chave_cte'           => $chaveCte,
+                        'chave_nfe'           => $chaveNfe,
+                        'arquivo'             => $nomeArquivo,
+                        'cidade_destino'      => $cidadeDestino,
+                        'regiao_sistema'      => $nomeRegiao,
+                        'percentual_sistema'  => ($percentual > 0) ? ($percentual * 100) . '%' : '-',
+                        'regiao_faturada'     => $regiaoFaturadaData['nome'],
+                        'percentual_faturado' => $regiaoFaturadaData['pct'],
+                        'tem_tde'             => $temTde ? 'Sim' : 'Não',
+                        'tipo_operacao'       => $tipoOperacao,
+                        'chave_original'      => $chaveOriginal,
+                        'valor_carga'         => (float) $valorCarga,
+                        
+                        // Valores faturados reais separados
+                        'valor_cobrado'       => (float) $valorCobradoOriginal,
+                        'valor_frete_cobrado' => (float) $valorFreteCobrado,
+                        'valor_tde_cobrado'   => (float) $valorTdeCobrado,
+                        
+                        // Valores ideais SLA separados
+                        'valor_sla'           => (float) $valorSlaCorreto,
+                        'valor_frete_sla'     => (float) $valorFreteSla,
+                        'valor_tde_sla'       => (float) $valorTdeSla,
+                        
+                        'diferenca'           => (float) $diferenca,
+                        'status'              => round($diferenca, 2) == 0 ? 'Validado' : 'Divergente',
+                        'motivo'              => $motivo 
+                    ];
+                }
+
+                // 4. Faxina: Deleta a pasta temporária do servidor
+                \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+                
+            } else {
+                return response()->json(['message' => 'Falha ao abrir o arquivo ZIP fornecido.'], 400);
             }
         }
 
@@ -146,11 +190,8 @@ class AuditoriaSlaController extends Controller
 
     public function exportarPdf($batchId)
     {
-        // ---------------------------------------------------------
-        // PREVINE ERRO DE TIMEOUT E MEMÓRIA NO DOMPDF PARA MILHARES DE LINHAS
-        // ---------------------------------------------------------
-        ini_set('max_execution_time', 0); // Remove o limite de 30 segundos
-        ini_set('memory_limit', '2G');    // Aumenta a memória temporariamente para 2GB
+        ini_set('max_execution_time', 0);
+        ini_set('memory_limit', '2G'); 
         
         $dadosFlat = Cache::get('auditoria_sla_' . $batchId);
 
@@ -169,7 +210,7 @@ class AuditoriaSlaController extends Controller
         return $pdf->stream('auditoria_sla_solfacil_' . now()->format('YmdHi') . '.pdf');
     }
 
-    private function agruparResultados($dadosFlat) {
+    public function agruparResultados($dadosFlat) {
         $agrupados = [];
 
         // Agrupa pais
@@ -187,16 +228,25 @@ class AuditoriaSlaController extends Controller
                 $chavePai = $item['chave_original'];
 
                 if ($chavePai && isset($agrupados[$chavePai])) {
-                    $agrupados[$chavePai]['valor_cobrado'] += $item['valor_cobrado'];
-                    
-                    // --- SOMA DE VALORES SEPARADOS ---
+                    $agrupados[$chavePai]['valor_cobrado']       += $item['valor_cobrado'];
                     $agrupados[$chavePai]['valor_frete_cobrado'] += $item['valor_frete_cobrado'];
                     $agrupados[$chavePai]['valor_tde_cobrado']   += $item['valor_tde_cobrado'];
-                    // ---------------------------------
                     
-                    $agrupados[$chavePai]['valor_sla'] += $item['valor_sla'];
-                    $agrupados[$chavePai]['diferenca'] += $item['diferenca'];
                     $agrupados[$chavePai]['tem_tde'] = 'Sim';
+
+                    // --- RECÁLCULO DO SLA PAI (CASO NÃO TIVESSE TDE ANTES) ---
+                    if ($agrupados[$chavePai]['valor_tde_sla'] == 0 && $agrupados[$chavePai]['regiao_sistema'] !== '-' && !str_contains($agrupados[$chavePai]['regiao_sistema'], 'Auto')) {
+                        $freteSlaComIcms = $agrupados[$chavePai]['valor_frete_sla'];
+                        $freteBaseSla = $freteSlaComIcms * 0.88; // Remove ICMS para aplicar regra do TDE
+                        
+                        $novaTdeSla = ($freteBaseSla > 666.67) ? ($freteBaseSla * 0.30) : 200.00;
+                        
+                        $agrupados[$chavePai]['valor_tde_sla'] = $novaTdeSla;
+                        $agrupados[$chavePai]['valor_sla'] = $freteSlaComIcms + $novaTdeSla;
+                    }
+
+                    // Recalcula diferença final
+                    $agrupados[$chavePai]['diferenca'] = $agrupados[$chavePai]['valor_sla'] - $agrupados[$chavePai]['valor_cobrado'];
                     $agrupados[$chavePai]['arquivos_complemento'][] = $item['arquivo'];
 
                     $diff = $agrupados[$chavePai]['diferenca'];
@@ -212,7 +262,7 @@ class AuditoriaSlaController extends Controller
 
         $resultadoFinal = array_values($agrupados);
 
-        // ORDENAÇÃO: 1º Prejuízo (diff > 0), 2º Correto (diff = 0), 3º Lucro (diff < 0)
+        // ORDENAÇÃO
         usort($resultadoFinal, function($a, $b) {
             $diffA = round($a['diferenca'], 2);
             $diffB = round($b['diferenca'], 2);
@@ -220,21 +270,11 @@ class AuditoriaSlaController extends Controller
             $grupoA = $diffA > 0 ? 1 : ($diffA < 0 ? 3 : 2);
             $grupoB = $diffB > 0 ? 1 : ($diffB < 0 ? 3 : 2);
 
-            // Ordena os grupos
-            if ($grupoA !== $grupoB) {
-                return $grupoA <=> $grupoB;
-            }
+            if ($grupoA !== $grupoB) return $grupoA <=> $grupoB;
 
-            // Dentro de Prejuízo (SLA > Cobrado), colocar o maior prejuízo primeiro (Decrescente)
-            if ($grupoA === 1) {
-                if ($diffA != $diffB) return $diffB <=> $diffA;
-            }
-            // Dentro de Lucro (SLA < Cobrado), colocar o maior lucro primeiro (Crescente, sendo número negativo)
-            if ($grupoA === 3) {
-                if ($diffA != $diffB) return $diffA <=> $diffB;
-            }
+            if ($grupoA === 1 && $diffA != $diffB) return $diffB <=> $diffA;
+            if ($grupoA === 3 && $diffA != $diffB) return $diffA <=> $diffB;
 
-            // Desempate alfabético por cidade e nome do arquivo
             return strcmp($a['cidade_destino'] . $a['arquivo'], $b['cidade_destino'] . $b['arquivo']);
         });
 
@@ -254,11 +294,8 @@ class AuditoriaSlaController extends Controller
 
         foreach ($regras as $nome => $regra) {
             $freteBase = max($regra['min'], $valorCarga * $regra['pct']);
-            
-            // REGRAS DA TDE ATUALIZADAS
             $tde = $temTde ? (($freteBase > 666.67) ? ($freteBase * 0.30) : 200.00) : 0;
             
-            // Calculo para descobrir a região sem aplicar ICMS na TDE
             $freteComIcms = $freteBase / 0.88;
             if (abs(($freteComIcms + $tde) - $valorCobrado) <= 1.50) {
                 return ['nome' => $nome . ' (Calc)', 'pct' => ($regra['pct'] * 100) . '%'];
@@ -269,8 +306,8 @@ class AuditoriaSlaController extends Controller
             $num = $matches[1];
             $pct = '-';
             if ($num == '1') $pct = '3%';
-            elseif ($num == '2') $pct = '3.5%';
-            elseif ($num == '3') $pct = '4%';
+            elseif ($num == '2') $pct = '3,5%';
+            elseif ($num == '3') $pct = '4';
             elseif ($num == '4') $pct = '5%';
             return ['nome' => 'Região ' . $num, 'pct' => $pct];
         }
@@ -300,7 +337,6 @@ class AuditoriaSlaController extends Controller
         ];
     }
 
-    // --- Mapeamento Limpo e Integral das Cidades Totalmente Desagrupado (Sem Barras) ---
     private function getRegiaoPorCidade($cidade) {
         $cidadeLpa = strtoupper(preg_replace('/[^A-Za-z0-9 ]/', '', Str::ascii($cidade)));
         $cidadeLpa = trim($cidadeLpa);
@@ -971,10 +1007,7 @@ class AuditoriaSlaController extends Controller
     
     private function extractChaveOriginal($data) {
         $base = $this->getBaseNode($data);
-        
-        // --- CORREÇÃO 1: A tag no XML versão 4.00 da SEFAZ se chama chCTe, não chave! ---
         if ($base && isset($base['infCteComp']['chCTe'])) return (string) $base['infCteComp']['chCTe'];
-        
         if ($base && isset($base['infCteComp']['chave'])) return (string) $base['infCteComp']['chave'];
         return null;
     }
@@ -1022,10 +1055,42 @@ class AuditoriaSlaController extends Controller
         return 0.00; 
     }
     
-    private function extractFreightValue($data) { 
-        $base = $this->getBaseNode($data); 
-        if ($base && isset($base['vPrest']['vTPrest'])) return (float) $base['vPrest']['vTPrest']; 
-        return 0.00; 
+    // --- NOVA FUNÇÃO: Extração inteligente de Frete e TDE ---
+    private function extractValoresXML($data, $tipoOperacao) {
+        $base = $this->getBaseNode($data);
+        $total = 0;
+        $tde = 0;
+
+        if ($base && isset($base['vPrest']['vTPrest'])) {
+            $total = (float) $base['vPrest']['vTPrest'];
+        }
+
+        if ($base && isset($base['vPrest']['Comp'])) {
+            $comps = $base['vPrest']['Comp'];
+            if (isset($comps['xNome'])) {
+                $comps = [$comps];
+            }
+            foreach ($comps as $c) {
+                $nome = strtoupper(trim((string)($c['xNome'] ?? '')));
+                $valor = (float)($c['vComp'] ?? 0);
+                
+                if (str_contains($nome, 'TDE') || str_contains($nome, 'RURAL') || str_contains($nome, 'DIFICULDADE') || str_contains($nome, 'TRT')) {
+                    $tde += $valor;
+                }
+            }
+        }
+
+        if ($tipoOperacao === 'Complemento' && $tde == 0) {
+            $tde = $total;
+        }
+
+        $frete = $total - $tde;
+
+        return [
+            'total' => $total,
+            'frete' => max(0, $frete),
+            'tde'   => $tde
+        ];
     }
     
     private function extractObs($data) { 
@@ -1044,13 +1109,10 @@ class AuditoriaSlaController extends Controller
     private function extractChaveNFe($data) {
         $base = $this->getBaseNode($data);
         
-        // 1. CT-e Normal: Chave de 44 dígitos
         if (isset($base['infCTeNorm']['infDoc']['infNFe']['chave'])) {
             return (string) $base['infCTeNorm']['infDoc']['infNFe']['chave'];
         }
         
-        // --- CORREÇÃO 2: CT-e Complementar (TDE) ---
-        // Extrai o número da NF que vem nas observações para não ficar "SEM_NFE" e sumir no buraco negro.
         $obs = $this->extractObs($data);
         if (preg_match('/NF\s*[:\-]?\s*(\d+)/i', $obs, $matches)) {
             return 'NF_EXTRAIDA_' . $matches[1]; 

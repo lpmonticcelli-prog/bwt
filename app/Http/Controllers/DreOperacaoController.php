@@ -16,19 +16,32 @@ class DreOperacaoController extends Controller
             'batch_e4log' => 'required|string',
         ]);
 
-        $dadosSla   = Cache::get('auditoria_sla_' . $request->batch_sla, []);
-        $dadosE4log = Cache::get('auditoria_e4log_' . $request->batch_e4log, []);
+        $dadosSlaFlat   = Cache::get('auditoria_sla_' . $request->batch_sla, []);
+        $dadosE4logFlat = Cache::get('auditoria_e4log_' . $request->batch_e4log, []);
 
-        if (empty($dadosSla) || empty($dadosE4log)) {
+        if (empty($dadosSlaFlat) || empty($dadosE4logFlat)) {
             return response()->json(['message' => 'Lotes expirados ou vazios. Processe os XMLs novamente.'], 400);
         }
 
-        // Indexar E4LOG
+        // 1. CORREÇÃO: Agrupar (mesclar complementos) ANTES de cruzar na DRE!
+        $slaCtrl = new AuditoriaSlaController();
+        $e4logCtrl = new AuditoriaE4logController();
+        
+        $dadosSla = $slaCtrl->agruparResultados($dadosSlaFlat);
+        $dadosE4log = $e4logCtrl->agruparResultados($dadosE4logFlat);
+
+        // 2. CORREÇÃO: Indexar E4LOG com Fallback para notas sem NF-e
         $custosE4logIndexados = [];
+        $custosE4logSemNfe = []; // Hash Fallback
+        
         foreach ($dadosE4log as $e4log) {
             $chaveNfe = $e4log['chave_nfe'] ?? null;
             if ($chaveNfe && !str_contains($chaveNfe, 'SEM_NFE')) {
                 $custosE4logIndexados[$chaveNfe] = $e4log;
+            } else {
+                // Cria um hash único baseado na cidade e no valor exato da carga
+                $hash = md5(($e4log['cidade_destino'] ?? '') . ($e4log['valor_carga'] ?? 0));
+                $custosE4logSemNfe[$hash] = $e4log;
             }
         }
 
@@ -37,12 +50,27 @@ class DreOperacaoController extends Controller
             'total_receita_real' => 0, 'total_receita_ideal'=> 0,
             'total_custo_real'   => 0, 'total_custo_ideal'  => 0,
             'lucro_bruto_real'   => 0, 'lucro_bruto_ideal'  => 0,
-            'qtd_alertas'        => 0, 'qtd_match'          => 0, 'qtd_prejuizo'       => 0,
+            'margem_global'      => 0,
+            'qtd_alertas'        => 0, 'qtd_match'          => 0, 'qtd_prejuizo' => 0,
         ];
 
-        // 1. CRUZAMENTO (BWT -> SOL FÁCIL)
+        // 3. CRUZAMENTO (BWT -> SOL FÁCIL)
         foreach ($dadosSla as $sla) {
             $chaveNfe = $sla['chave_nfe'] ?? null;
+            $e4logMatch = null;
+
+            // Tentativa 1: Match pela NF-e exata
+            if ($chaveNfe && !str_contains($chaveNfe, 'SEM_NFE') && isset($custosE4logIndexados[$chaveNfe])) {
+                $e4logMatch = $custosE4logIndexados[$chaveNfe];
+                unset($custosE4logIndexados[$chaveNfe]); 
+            } else {
+                // Tentativa 2: Fallback Match (Salva as notas sem NF-e da perdição)
+                $hashFallback = md5(($sla['cidade_destino'] ?? '') . ($sla['valor_carga'] ?? 0));
+                if (isset($custosE4logSemNfe[$hashFallback])) {
+                    $e4logMatch = $custosE4logSemNfe[$hashFallback];
+                    unset($custosE4logSemNfe[$hashFallback]);
+                }
+            }
             
             // Separação de Receita Real (Faturado)
             $recValorFaturado = (float) ($sla['valor_cobrado'] ?? 0);
@@ -54,7 +82,7 @@ class DreOperacaoController extends Controller
             $recFreteIdeal    = (float) ($sla['valor_frete_sla'] ?? $recValorIdeal);
             $recTdeIdeal      = (float) ($sla['valor_tde_sla'] ?? 0);
             
-            // E4LOG (Custo Inicial Zerado)
+            // Variáveis Custo Iniciais
             $cusMatriz = '-'; $cusFaturada = '-';
             $cusValorCobrado = 0; $cusFreteCobrado = 0; $cusTdeCobrado = 0;
             $cusValorIdeal = 0;   $cusFreteIdeal = 0;   $cusTdeIdeal = 0;
@@ -64,29 +92,25 @@ class DreOperacaoController extends Controller
             $arquivosE4logCompl = [];
 
             // Se achou correspondência no Custo (Match)
-            if ($chaveNfe && isset($custosE4logIndexados[$chaveNfe])) {
-                $e4log = $custosE4logIndexados[$chaveNfe];
+            if ($e4logMatch) {
+                $cusMatriz = $e4logMatch['regiao_sistema'] ?? '-';
+                $cusFaturada = ($e4logMatch['regiao_faturada'] ?? '-') . ' (' . ($e4logMatch['percentual_faturado'] ?? '-') . ')';
                 
-                $cusMatriz = $e4log['regiao_sistema'] ?? '-';
-                $cusFaturada = ($e4log['regiao_faturada'] ?? '-') . ' (' . ($e4log['percentual_faturado'] ?? '-') . ')';
+                // Custo Real
+                $cusValorCobrado = (float) ($e4logMatch['valor_cobrado'] ?? 0);
+                $cusFreteCobrado = (float) ($e4logMatch['valor_frete_cobrado'] ?? $cusValorCobrado);
+                $cusTdeCobrado   = (float) ($e4logMatch['valor_tde_cobrado'] ?? 0);
                 
-                // Custo Real (Cobrado E4log)
-                $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
-                $cusFreteCobrado = (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado);
-                $cusTdeCobrado   = (float) ($e4log['valor_tde_cobrado'] ?? 0);
+                // Custo Ideal
+                $cusValorIdeal   = (float) ($e4logMatch['valor_sla'] ?? 0);
+                $cusFreteIdeal   = (float) ($e4logMatch['valor_frete_sla'] ?? $cusValorIdeal);
+                $cusTdeIdeal     = (float) ($e4logMatch['valor_tde_sla'] ?? 0);
                 
-                // Custo Ideal (SLA Matriz E4log)
-                $cusValorIdeal   = (float) ($e4log['valor_sla'] ?? 0);
-                $cusFreteIdeal   = (float) ($e4log['valor_frete_sla'] ?? $cusValorIdeal);
-                $cusTdeIdeal     = (float) ($e4log['valor_tde_sla'] ?? 0);
-                
-                $cusDiferenca = (float) ($e4log['diferenca'] ?? 0);
-                
-                $arquivoE4log = $e4log['arquivo'] ?? '-';
-                $arquivosE4logCompl = $e4log['arquivos_complemento'] ?? [];
+                $cusDiferenca = (float) ($e4logMatch['diferenca'] ?? 0);
+                $arquivoE4log = $e4logMatch['arquivo'] ?? '-';
+                $arquivosE4logCompl = $e4logMatch['arquivos_complemento'] ?? [];
 
                 $resumo['qtd_match']++;
-                unset($custosE4logIndexados[$chaveNfe]); 
             }
 
             $lucroReal = $recValorFaturado - $cusValorCobrado;
@@ -103,7 +127,7 @@ class DreOperacaoController extends Controller
             $resumo['lucro_bruto_real'] += $lucroReal;          $resumo['lucro_bruto_ideal'] += $lucroIdeal;
 
             $dreResultados[] = [
-                'chave_nfe'     => $chaveNfe,
+                'chave_nfe'     => str_contains($chaveNfe, 'SEM_NFE') ? 'SEM NF-e (Match via Hash)' : $chaveNfe,
                 'cidade'        => $sla['cidade_destino'] ?? 'Desconhecida',
                 'valor_carga'   => $sla['valor_carga'] ?? 0,
                 'tem_tde'       => $sla['tem_tde'] ?? 'Não',
@@ -142,8 +166,12 @@ class DreOperacaoController extends Controller
             ];
         }
 
-        // 2. FUROS DE FATURAMENTO (Custos E4LOG que não têm receita na BWT)
-        foreach ($custosE4logIndexados as $chaveNfe => $e4log) {
+        // 4. FUROS DE FATURAMENTO (Custos E4LOG Órfãos sem Receita)
+        // Combina o que sobrou nos dois arrays de controle
+        $sobrasE4log = array_merge(array_values($custosE4logIndexados), array_values($custosE4logSemNfe));
+        
+        foreach ($sobrasE4log as $e4log) {
+            $chaveOriginalNfe = $e4log['chave_nfe'] ?? '-';
             $cusValorCobrado = (float) ($e4log['valor_cobrado'] ?? 0);
             $cusFreteCobrado = (float) ($e4log['valor_frete_cobrado'] ?? $cusValorCobrado);
             $cusTdeCobrado   = (float) ($e4log['valor_tde_cobrado'] ?? 0);
@@ -157,7 +185,7 @@ class DreOperacaoController extends Controller
             $resumo['qtd_alertas']++; $resumo['qtd_prejuizo']++;
 
             $dreResultados[] = [
-                'chave_nfe'     => $chaveNfe,
+                'chave_nfe'     => str_contains($chaveOriginalNfe, 'SEM_NFE') ? 'SEM NF-e' : $chaveOriginalNfe,
                 'cidade'        => $e4log['cidade_destino'] ?? '-',
                 'valor_carga'   => $e4log['valor_carga'] ?? 0,
                 'tem_tde'       => $e4log['tem_tde'] ?? 'Não',
@@ -189,12 +217,41 @@ class DreOperacaoController extends Controller
             ];
         }
 
+        // Calcula Margem Global
+        $resumo['margem_global'] = $resumo['total_receita_real'] > 0 
+            ? round(($resumo['lucro_bruto_real'] / $resumo['total_receita_real']) * 100, 2) 
+            : 0;
+
+        // Ordenação da DRE (Maior prejuízo primeiro, depois maior lucro, depois zerados)
         usort($dreResultados, function($a, $b) {
-            if ($a['status'] === 'FURO DE RECEITA') return -1;
-            if ($b['status'] === 'FURO DE RECEITA') return 1;
-            if ($a['status'] === 'DIVERGÊNCIA') return -1;
-            if ($b['status'] === 'DIVERGÊNCIA') return 1;
-            return $a['dre']['lucro_real'] <=> $b['dre']['lucro_real'];
+            // 1º Prioridade Absoluta: Furos de Receita sempre no topo
+            if ($a['status'] === 'FURO DE RECEITA' && $b['status'] !== 'FURO DE RECEITA') return -1;
+            if ($b['status'] === 'FURO DE RECEITA' && $a['status'] !== 'FURO DE RECEITA') return 1;
+
+            $lucroA = round($a['dre']['lucro_real'], 2);
+            $lucroB = round($b['dre']['lucro_real'], 2);
+
+            // Separar em 3 grupos: 1 = Negativos, 2 = Positivos, 3 = Zerados
+            $grupoA = $lucroA < 0 ? 1 : ($lucroA > 0 ? 2 : 3);
+            $grupoB = $lucroB < 0 ? 1 : ($lucroB > 0 ? 2 : 3);
+
+            // Se estão em grupos diferentes, ordena pela ordem (Negativos -> Positivos -> Zerados)
+            if ($grupoA !== $grupoB) {
+                return $grupoA <=> $grupoB;
+            }
+
+            // Se ambos são Negativos, do MAIOR prejuízo para o menor (ex: -5000 vem antes de -100)
+            if ($grupoA === 1) {
+                return $lucroA <=> $lucroB; 
+            }
+
+            // Se ambos são Positivos, do MAIOR lucro para o menor (ex: 5000 vem antes de 100)
+            if ($grupoA === 2) {
+                return $lucroB <=> $lucroA; 
+            }
+
+            // Desempate por cidade se for tudo igual
+            return strcmp($a['cidade'] . $a['chave_nfe'], $b['cidade'] . $b['chave_nfe']);
         });
 
         $batchDreId = Str::uuid()->toString();

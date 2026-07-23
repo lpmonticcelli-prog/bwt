@@ -102,138 +102,169 @@ class AuditoriaE4logController extends Controller
 
     public function processar(Request $request)
     {
-        $request->validate(['files.*' => 'required|file|mimes:xml']);
+        // 1. Blindagem de Memória e Tempo para aguentar milhares de arquivos
+        ini_set('max_execution_time', 0);
+        ini_set('memory_limit', '2G');
+
+        $request->validate([
+            'file_zip' => 'required|file|mimes:zip',
+        ]);
 
         $batchId = $request->input('batch_id', Str::uuid()->toString());
         $resultadosAtuais = [];
 
-        if ($request->hasFile('files')) {
-            foreach ($request->file('files') as $file) {
-                
-                $data = $this->parseXml($file);
-                if (!$data) continue; 
+        // 2. Lógica de Extração do ZIP
+        if ($request->hasFile('file_zip')) {
+            $zip = new \ZipArchive;
+            $zipFile = $request->file('file_zip')->getPathname();
 
-                $nomeArquivo = Str::limit($file->getClientOriginalName(), 250, '');
+            if ($zip->open($zipFile) === true) {
+                // Cria pasta temporária única
+                $tempDir = storage_path('app/temp_xml_e4log_' . uniqid());
+                \Illuminate\Support\Facades\File::makeDirectory($tempDir, 0755, true);
                 
-                // Extrações Base do XML
-                $localDestino         = $this->extractCityAndUf($data);
-                $cidadeDestino        = $localDestino['cidade'];
-                $ufDestino            = $localDestino['uf'];
-                
-                $valorCarga           = $this->extractInvoiceValue($data);
-                $observacoesTexto     = $this->extractObs($data);
-                $tipoCTe              = $this->extractTipoCTe($data);
-                
-                $temTde               = $this->verificarTde($data, $observacoesTexto, $tipoCTe);
-                $tipoOperacao         = $this->extractTipoOperacao($observacoesTexto, $tipoCTe);
-                
-                // Extração rigorosa das chaves garantindo apenas NÚMEROS (Garante o lastro do complemento)
-                $chaveCte             = $this->extractChaveCTe($data, $nomeArquivo);
-                $chaveOriginal        = $this->extractChaveOriginal($data);
-                $chaveNfe             = $this->extractChaveNFe($data); 
-                
-                // Extração Perfeita dos valores Faturados detalhados no XML (Total, Frete, TDE)
-                $valoresFaturados     = $this->extractValoresXML($data, $tipoOperacao);
-                $valorCobradoOriginal = $valoresFaturados['total'];
-                $valorFreteCobrado    = $valoresFaturados['frete'];
-                $valorTdeCobrado      = $valoresFaturados['tde'];
-                
-                $regiaoFaturadaData   = $this->descobrirRegiaoFaturada($observacoesTexto, $valorCarga, $valorCobradoOriginal, $temTde, $tipoOperacao);
+                // Extrai os XMLs
+                $zip->extractTo($tempDir);
+                $zip->close();
 
-                // 1. VERIFICAÇÃO DE UF E BUSCA DA TABELA OFICIAL
-                if ($ufDestino !== 'SP' && $ufDestino !== '') {
-                    $nomeRegiao = "Tabela " . $ufDestino . " Ausente";
-                    $percentual = 0;
-                    $minimo = 0;
-                } else {
-                    $nomeRegiao = $this->getRegiaoPorCidade($cidadeDestino);
+                // Busca todos os arquivos extraídos (mesmo que estejam dentro de subpastas no ZIP)
+                $files = \Illuminate\Support\Facades\File::allFiles($tempDir);
 
-                    // Fallback Inteligente baseado na nomenclatura da Região Faturada
-                    if ($nomeRegiao === '-') {
-                        $regFat = strtoupper($regiaoFaturadaData['nome']);
-                        if (str_contains($regFat, 'REGIÃO 1')) $nomeRegiao = self::NOMENCLATURA_R1;
-                        elseif (str_contains($regFat, 'REGIÃO 2')) $nomeRegiao = self::NOMENCLATURA_R2;
-                        elseif (str_contains($regFat, 'REGIÃO 3')) $nomeRegiao = self::NOMENCLATURA_R3;
-                        elseif (str_contains($regFat, 'REGIÃO 4')) $nomeRegiao = self::NOMENCLATURA_R4;
-                        else $nomeRegiao = 'Indefinida/SP'; 
-                        
-                        if ($nomeRegiao !== 'Indefinida/SP') $nomeRegiao .= ' (Auto)';
-                    }
+                foreach ($files as $file) {
+                    // Ignora arquivos que não sejam XML
+                    if (strtolower($file->getExtension()) !== 'xml') continue;
+
+                    // Lê o XML e processa
+                    $xmlContent = file_get_contents($file->getPathname());
+                    $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
+                    $xmlObj = simplexml_load_string($xmlContent);
                     
-                    $regiaoBase = str_replace(' (Auto)', '', $nomeRegiao);
-                    $percentual = self::REGRAS_REGIAO[$regiaoBase]['pct'] ?? 0;
-                    $minimo     = self::REGRAS_REGIAO[$regiaoBase]['min'] ?? 0;
-                }
-
-                // 2. MATEMÁTICA DE AUDITORIA (SLA)
-                $valorFreteSla = 0;
-                $valorTdeSla = 0;
-                $valorSlaCorreto = 0;
-                $diferenca = 0;
-
-                if ($tipoOperacao === 'Complemento') {
-                    $valorFreteSla = 0; 
-                    $valorTdeSla = 0;
-                } else if ($nomeRegiao !== "Tabela {$ufDestino} Ausente" && $nomeRegiao !== 'Indefinida/SP') {
+                    if (!$xmlObj) continue; // Pula XML corrompido para não travar
                     
-                    // 1) VALOR DO FRETE SLA:
-                    $freteCalculado = $valorCarga * $percentual;
-                    $valorFreteSla = max($minimo, $freteCalculado);
+                    $data = json_decode(json_encode($xmlObj), true);
+                    $nomeArquivo = Str::limit($file->getFilename(), 250, '');
                     
-                    // 2) TDE SLA: Mínimo de R$ 160,00 ou 20% do valor do frete calculado
-                    $valorTdeSla = $temTde ? max(160.00, $valorFreteSla * 0.20) : 0;
+                    // Extrações Base do XML
+                    $localDestino         = $this->extractCityAndUf($data);
+                    $cidadeDestino        = $localDestino['cidade'];
+                    $ufDestino            = $localDestino['uf'];
                     
-                    // 3) SOMA SLA
-                    $valorSlaCorreto = $valorFreteSla + $valorTdeSla;
-                    $diferenca       = $valorSlaCorreto - $valorCobradoOriginal;
-                }
+                    $valorCarga           = $this->extractInvoiceValue($data);
+                    $observacoesTexto     = $this->extractObs($data);
+                    $tipoCTe              = $this->extractTipoCTe($data);
+                    
+                    $temTde               = $this->verificarTde($data, $observacoesTexto, $tipoCTe);
+                    $tipoOperacao         = $this->extractTipoOperacao($observacoesTexto, $tipoCTe);
+                    
+                    // Extração rigorosa das chaves garantindo apenas NÚMEROS (Garante o lastro do complemento)
+                    $chaveCte             = $this->extractChaveCTe($data, $nomeArquivo);
+                    $chaveOriginal        = $this->extractChaveOriginal($data);
+                    $chaveNfe             = $this->extractChaveNFe($data); 
+                    
+                    // Extração Perfeita dos valores Faturados detalhados no XML (Total, Frete, TDE)
+                    $valoresFaturados     = $this->extractValoresXML($data, $tipoOperacao);
+                    $valorCobradoOriginal = $valoresFaturados['total'];
+                    $valorFreteCobrado    = $valoresFaturados['frete'];
+                    $valorTdeCobrado      = $valoresFaturados['tde'];
+                    
+                    $regiaoFaturadaData   = $this->descobrirRegiaoFaturada($observacoesTexto, $valorCarga, $valorCobradoOriginal, $temTde, $tipoOperacao);
 
-                // 3. DEFINIÇÃO DO MOTIVO / STATUS
-                if (str_contains($nomeRegiao, 'Ausente') || $nomeRegiao === 'Indefinida/SP') {
-                    $status = 'Alerta';
-                    $motivo = "Requer revisão manual (Tabela não parametrizada).";
-                    $diferenca = 0; 
-                } else {
-                    if (round($diferenca, 2) > 0) {
-                        $status = 'Divergente';
-                        $motivo = "Cobrado a MENOS. E4LOG perdeu R$ " . number_format(abs($diferenca), 2, ',', '.');
-                    } elseif (round($diferenca, 2) < 0) {
-                        $status = 'Divergente';
-                        $motivo = "Cobrado a MAIS. BWT pagou R$ " . number_format(abs($diferenca), 2, ',', '.') . " indevidamente.";
+                    // 1. VERIFICAÇÃO DE UF E BUSCA DA TABELA OFICIAL
+                    if ($ufDestino !== 'SP' && $ufDestino !== '') {
+                        $nomeRegiao = "Tabela " . $ufDestino . " Ausente";
+                        $percentual = 0;
+                        $minimo = 0;
                     } else {
-                        $status = 'Validado';
-                        $motivo = "Validação 100% Exata com a Matriz.";
+                        $nomeRegiao = $this->getRegiaoPorCidade($cidadeDestino);
+
+                        // Fallback Inteligente baseado na nomenclatura da Região Faturada
+                        if ($nomeRegiao === '-') {
+                            $regFat = strtoupper($regiaoFaturadaData['nome']);
+                            if (str_contains($regFat, 'REGIÃO 1')) $nomeRegiao = self::NOMENCLATURA_R1;
+                            elseif (str_contains($regFat, 'REGIÃO 2')) $nomeRegiao = self::NOMENCLATURA_R2;
+                            elseif (str_contains($regFat, 'REGIÃO 3')) $nomeRegiao = self::NOMENCLATURA_R3;
+                            elseif (str_contains($regFat, 'REGIÃO 4')) $nomeRegiao = self::NOMENCLATURA_R4;
+                            else $nomeRegiao = 'Indefinida/SP'; 
+                            
+                            if ($nomeRegiao !== 'Indefinida/SP') $nomeRegiao .= ' (Auto)';
+                        }
+                        
+                        $regiaoBase = str_replace(' (Auto)', '', $nomeRegiao);
+                        $percentual = self::REGRAS_REGIAO[$regiaoBase]['pct'] ?? 0;
+                        $minimo     = self::REGRAS_REGIAO[$regiaoBase]['min'] ?? 0;
                     }
+
+                    // 2. MATEMÁTICA DE AUDITORIA (SLA)
+                    $valorFreteSla = 0;
+                    $valorTdeSla = 0;
+                    $valorSlaCorreto = 0;
+                    $diferenca = 0;
+
+                    if ($tipoOperacao === 'Complemento') {
+                        $valorFreteSla = 0; 
+                        $valorTdeSla = 0;
+                    } else if ($nomeRegiao !== "Tabela {$ufDestino} Ausente" && $nomeRegiao !== 'Indefinida/SP') {
+                        
+                        // 1) VALOR DO FRETE SLA:
+                        $freteCalculado = $valorCarga * $percentual;
+                        $valorFreteSla = max($minimo, $freteCalculado);
+                        
+                        // 2) TDE SLA: Mínimo de R$ 160,00 ou 20% do valor do frete calculado
+                        $valorTdeSla = $temTde ? max(160.00, $valorFreteSla * 0.20) : 0;
+                        
+                        // 3) SOMA SLA
+                        $valorSlaCorreto = $valorFreteSla + $valorTdeSla;
+                        $diferenca       = $valorSlaCorreto - $valorCobradoOriginal;
+                    }
+
+                    // 3. DEFINIÇÃO DO MOTIVO / STATUS
+                    if (str_contains($nomeRegiao, 'Ausente') || $nomeRegiao === 'Indefinida/SP') {
+                        $status = 'Alerta';
+                        $motivo = "Requer revisão manual (Tabela não parametrizada).";
+                        $diferenca = 0; 
+                    } else {
+                        if (round($diferenca, 2) > 0) {
+                            $status = 'Divergente';
+                            $motivo = "Cobrado a MENOS. E4LOG perdeu R$ " . number_format(abs($diferenca), 2, ',', '.');
+                        } elseif (round($diferenca, 2) < 0) {
+                            $status = 'Divergente';
+                            $motivo = "Cobrado a MAIS. BWT pagou R$ " . number_format(abs($diferenca), 2, ',', '.') . " indevidamente.";
+                        } else {
+                            $status = 'Validado';
+                            $motivo = "Validação 100% Exata com a Matriz.";
+                        }
+                    }
+
+                    $resultadosAtuais[] = [
+                        'chave_cte'           => $chaveCte,
+                        'chave_nfe'           => $chaveNfe, 
+                        'arquivo'             => $nomeArquivo,
+                        'cidade_destino'      => $cidadeDestino . ($ufDestino ? " - {$ufDestino}" : ''),
+                        'regiao_sistema'      => $nomeRegiao,
+                        'percentual_sistema'  => ($percentual > 0) ? ($percentual * 100) . '%' : '-',
+                        'regiao_faturada'     => $regiaoFaturadaData['nome'],
+                        'percentual_faturado' => $regiaoFaturadaData['pct'],
+                        'tem_tde'             => $temTde ? 'Sim' : 'Não',
+                        'tipo_operacao'       => $tipoOperacao,
+                        'chave_original'      => $chaveOriginal,
+                        'valor_carga'         => (float) $valorCarga,
+                        'valor_cobrado'       => (float) $valorCobradoOriginal,
+                        'valor_frete_cobrado' => (float) $valorFreteCobrado,
+                        'valor_tde_cobrado'   => (float) $valorTdeCobrado,
+                        'valor_sla'           => (float) $valorSlaCorreto,
+                        'valor_frete_sla'     => (float) $valorFreteSla, 
+                        'valor_tde_sla'       => (float) $valorTdeSla,   
+                        'diferenca'           => (float) $diferenca,
+                        'status'              => $status,
+                        'motivo'              => $motivo 
+                    ];
                 }
 
-                $resultadosAtuais[] = [
-                    'chave_cte'           => $chaveCte,
-                    'chave_nfe'           => $chaveNfe, 
-                    'arquivo'             => $nomeArquivo,
-                    'cidade_destino'      => $cidadeDestino . ($ufDestino ? " - {$ufDestino}" : ''),
-                    'regiao_sistema'      => $nomeRegiao,
-                    'percentual_sistema'  => ($percentual > 0) ? ($percentual * 100) . '%' : '-',
-                    'regiao_faturada'     => $regiaoFaturadaData['nome'],
-                    'percentual_faturado' => $regiaoFaturadaData['pct'],
-                    'tem_tde'             => $temTde ? 'Sim' : 'Não',
-                    'tipo_operacao'       => $tipoOperacao,
-                    'chave_original'      => $chaveOriginal,
-                    'valor_carga'         => (float) $valorCarga,
-                    
-                    // Faturado no XML
-                    'valor_cobrado'       => (float) $valorCobradoOriginal,
-                    'valor_frete_cobrado' => (float) $valorFreteCobrado,
-                    'valor_tde_cobrado'   => (float) $valorTdeCobrado,
-                    
-                    // SLA Matemático
-                    'valor_sla'           => (float) $valorSlaCorreto,
-                    'valor_frete_sla'     => (float) $valorFreteSla, 
-                    'valor_tde_sla'       => (float) $valorTdeSla,   
-                    
-                    'diferenca'           => (float) $diferenca,
-                    'status'              => $status,
-                    'motivo'              => $motivo 
-                ];
+                // 4. Faxina: Deleta a pasta temporária do servidor
+                \Illuminate\Support\Facades\File::deleteDirectory($tempDir);
+                
+            } else {
+                return response()->json(['message' => 'Falha ao abrir o arquivo ZIP fornecido.'], 400);
             }
         }
 
@@ -268,7 +299,8 @@ class AuditoriaE4logController extends Controller
         return $pdf->stream('auditoria_e4log_' . now()->format('YmdHi') . '.pdf');
     }
 
-    private function agruparResultados($dadosFlat) {
+    // MANTIDO COMO PUBLIC PARA A DRE NÃO DAR ERRO 500
+    public function agruparResultados($dadosFlat) {
         $agrupados = [];
 
         // 1. Mapeia todos os CTEs Normais (Pais)
@@ -337,16 +369,29 @@ class AuditoriaE4logController extends Controller
 
         $resultadoFinal = array_values($agrupados);
 
+        // ORDENAÇÃO E4LOG
         usort($resultadoFinal, function($a, $b) {
             $diffA = round($a['diferenca'], 2);
             $diffB = round($b['diferenca'], 2);
-            
-            if ($a['status'] === 'Alerta' && $b['status'] !== 'Alerta') return -1;
-            if ($a['status'] !== 'Alerta' && $b['status'] === 'Alerta') return 1;
 
-            if ($diffA != 0 && $diffB == 0) return -1;
-            if ($diffA == 0 && $diffB != 0) return 1;
-            
+            // Grupo 1: Negativos, Grupo 2: Positivos, Grupo 3: Zerados
+            $grupoA = $diffA < 0 ? 1 : ($diffA > 0 ? 2 : 3);
+            $grupoB = $diffB < 0 ? 1 : ($diffB > 0 ? 2 : 3);
+
+            if ($grupoA !== $grupoB) {
+                return $grupoA <=> $grupoB;
+            }
+
+            // Se ambos Negativos: do MAIOR (-500) para o menor (-10)
+            if ($grupoA === 1) {
+                return $diffA <=> $diffB; 
+            }
+
+            // Se ambos Positivos: do MAIOR (+500) para o menor (+10)
+            if ($grupoA === 2) {
+                return $diffB <=> $diffA; 
+            }
+
             return strcmp($a['cidade_destino'] . $a['arquivo'], $b['cidade_destino'] . $b['arquivo']);
         });
 

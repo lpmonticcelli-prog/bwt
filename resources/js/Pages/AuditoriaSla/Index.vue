@@ -14,37 +14,30 @@ const isProcessingSla = ref(false);
 const progressoSla = ref('');
 
 const uploadSla = async (event) => {
-    const files = event.target.files;
-    if (!files.length) return;
+    const file = event.target.files[0];
+    if (!file) return;
     
     isProcessingSla.value = true;
-    const chunkSize = 20; 
-    let index = 0;
-    const totalFiles = files.length;
+    progressoSla.value = 'Extraindo e processando lote ZIP... Aguarde.';
     
     try {
-        while (index < totalFiles) {
-            const chunk = Array.from(files).slice(index, index + chunkSize);
-            const formData = new FormData();
-            chunk.forEach(file => formData.append('files[]', file));
-            if (batchSla.value) formData.append('batch_id', batchSla.value);
+        const formData = new FormData();
+        formData.append('file_zip', file);
+        if (batchSla.value) formData.append('batch_id', batchSla.value);
 
-            progressoSla.value = `Processando SLA: ${Math.min(index + chunkSize, totalFiles)} de ${totalFiles} ficheiros...`;
-            
-            const response = await axios.post('/auditoria-sla/processar', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            
-            resultadosSla.value = response.data.data;
-            batchSla.value = response.data.batch_id; 
-            index += chunkSize;
-        }
+        const response = await axios.post('/auditoria-sla/processar', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        resultadosSla.value = response.data.data;
+        batchSla.value = response.data.batch_id; 
+        progressoSla.value = 'Concluído com sucesso!';
     } catch (error) {
         console.error("Erro no SLA:", error);
-        alert(`Ocorreu um erro ao processar o lote SLA.`);
+        alert(`Erro ao processar o ZIP. Certifique-se de que o arquivo contém XMLs válidos.`);
+        progressoSla.value = 'Falha no processamento.';
     } finally {
         isProcessingSla.value = false;
-        progressoSla.value = 'Concluído!';
         event.target.value = '';
     }
 };
@@ -64,37 +57,30 @@ const isProcessingE4log = ref(false);
 const progressoE4log = ref('');
 
 const uploadE4log = async (event) => {
-    const files = event.target.files;
-    if (!files.length) return;
+    const file = event.target.files[0];
+    if (!file) return;
 
     isProcessingE4log.value = true;
-    const chunkSize = 20; 
-    let index = 0;
-    const totalFiles = files.length;
+    progressoE4log.value = 'Extraindo e processando lote ZIP... Aguarde.';
 
     try {
-        while (index < totalFiles) {
-            const chunk = Array.from(files).slice(index, index + chunkSize);
-            const formData = new FormData();
-            chunk.forEach(file => formData.append('files[]', file));
-            if (batchE4log.value) formData.append('batch_id', batchE4log.value);
+        const formData = new FormData();
+        formData.append('file_zip', file);
+        if (batchE4log.value) formData.append('batch_id', batchE4log.value);
 
-            progressoE4log.value = `Processando E4LOG: ${Math.min(index + chunkSize, totalFiles)} de ${totalFiles} ficheiros...`;
-            
-            const response = await axios.post('/auditoria/e4log/processar', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            
-            resultadosE4log.value = response.data.data;
-            batchE4log.value = response.data.batch_id; 
-            index += chunkSize;
-        }
+        const response = await axios.post('/auditoria/e4log/processar', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        resultadosE4log.value = response.data.data;
+        batchE4log.value = response.data.batch_id; 
+        progressoE4log.value = 'Concluído com sucesso!';
     } catch (error) {
         console.error("Erro na E4LOG:", error);
-        alert(`Ocorreu um erro ao processar o lote E4LOG.`);
+        alert(`Erro ao processar o ZIP.`);
+        progressoE4log.value = 'Falha no processamento.';
     } finally {
         isProcessingE4log.value = false;
-        progressoE4log.value = 'Concluído!';
         event.target.value = '';
     }
 };
@@ -106,7 +92,7 @@ const exportarPdfE4log = () => {
 const totalE4logAnalisados = computed(() => resultadosE4log.value.length);
 
 // ==========================================
-// 3. ESTADO: DRE (CONFRONTO) - AGORA ATIVADO!
+// 3. ESTADO: DRE (CONFRONTO)
 // ==========================================
 const resultadosDre = ref([]);
 const resumoDre = ref(null);
@@ -144,6 +130,20 @@ const exportarPdfDre = () => {
 // ==========================================
 // FUNÇÕES AUXILIARES GERAIS
 // ==========================================
+const limparTudo = () => {
+    if(confirm('Tem certeza que deseja limpar todos os dados e começar uma nova auditoria?')) {
+        resultadosSla.value = [];
+        batchSla.value = null;
+        resultadosE4log.value = [];
+        batchE4log.value = null;
+        resultadosDre.value = [];
+        batchDre.value = null;
+        resumoDre.value = null;
+        progressoSla.value = '';
+        progressoE4log.value = '';
+    }
+};
+
 const formatCurrency = (value) => {
     if (value === undefined || value === null) return '0,00';
     return Math.abs(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -187,32 +187,34 @@ const getDreBadgeClass = (status) => {
                     <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500 relative overflow-hidden">
                         <div v-if="batchSla" class="absolute top-2 right-2 bg-green-100 text-green-700 text-[10px] font-bold px-2 py-1 rounded">LOTE NA MEMÓRIA</div>
                         <h3 class="text-lg font-bold mb-2 text-blue-700">1. Receita (SLA Sol Fácil)</h3>
-                        <p class="text-xs text-gray-500 mb-4 h-10">Suba as CT-es emitidas pela BWT para a Sol Fácil.</p>
+                        <p class="text-xs text-gray-500 mb-4 h-10">Faça o upload do arquivo .zip contendo os XMLs emitidos pela BWT.</p>
                         
+                        <!-- Upload Alterado para ZIP -->
                         <input 
-                            type="file" multiple accept=".xml" 
+                            type="file" accept=".zip" 
                             @change="uploadSla" 
                             :disabled="isProcessingSla"
                             class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer disabled:opacity-50"
                         />
                         <p v-if="isProcessingSla" class="mt-2 text-blue-600 font-semibold text-xs animate-pulse">{{ progressoSla }}</p>
-                        <p v-else-if="progressoSla === 'Concluído!'" class="mt-2 text-green-600 font-bold text-xs">{{ progressoSla }}</p>
+                        <p v-else-if="progressoSla === 'Concluído com sucesso!'" class="mt-2 text-green-600 font-bold text-xs">{{ progressoSla }}</p>
                     </div>
 
                     <!-- E4LOG -> BWT -->
                     <div class="bg-white p-6 rounded-lg shadow-sm border-l-4 border-indigo-500 relative overflow-hidden">
                         <div v-if="batchE4log" class="absolute top-2 right-2 bg-green-100 text-green-700 text-[10px] font-bold px-2 py-1 rounded">LOTE NA MEMÓRIA</div>
                         <h3 class="text-lg font-bold mb-2 text-indigo-700">2. Custos (Faturas E4LOG)</h3>
-                        <p class="text-xs text-gray-500 mb-4 h-10">Suba as CT-es emitidas pela E4LOG contra a BWT.</p>
+                        <p class="text-xs text-gray-500 mb-4 h-10">Faça o upload do arquivo .zip contendo os XMLs emitidos pela E4LOG.</p>
                         
+                        <!-- Upload Alterado para ZIP -->
                         <input 
-                            type="file" multiple accept=".xml" 
+                            type="file" accept=".zip" 
                             @change="uploadE4log" 
                             :disabled="isProcessingE4log"
                             class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer disabled:opacity-50"
                         />
                         <p v-if="isProcessingE4log" class="mt-2 text-indigo-600 font-semibold text-xs animate-pulse">{{ progressoE4log }}</p>
-                        <p v-else-if="progressoE4log === 'Concluído!'" class="mt-2 text-green-600 font-bold text-xs">{{ progressoE4log }}</p>
+                        <p v-else-if="progressoE4log === 'Concluído com sucesso!'" class="mt-2 text-green-600 font-bold text-xs">{{ progressoE4log }}</p>
                     </div>
                 </div>
 
@@ -222,14 +224,21 @@ const getDreBadgeClass = (status) => {
                         <h3 class="text-xl font-bold">Lotes Sincronizados</h3>
                         <p class="text-sm text-gray-400 mt-1">Confronte o faturamento da Sol Fácil com a cobrança da E4LOG pelo número da NFe (Placas) e extraia a DRE exata.</p>
                     </div>
-                    <button 
-                        @click="gerarDre" 
-                        :disabled="isProcessingDre"
-                        class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all flex items-center disabled:opacity-50">
-                        <svg v-if="!isProcessingDre" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        <svg v-else class="animate-spin w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                        {{ isProcessingDre ? 'Cruzando Matrizes...' : 'Gerar DRE da Operação' }}
-                    </button>
+                    <div class="flex space-x-3">
+                        <button 
+                            @click="limparTudo" 
+                            class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all">
+                            Limpar / Nova
+                        </button>
+                        <button 
+                            @click="gerarDre" 
+                            :disabled="isProcessingDre"
+                            class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-all flex items-center disabled:opacity-50">
+                            <svg v-if="!isProcessingDre" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                            <svg v-else class="animate-spin w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            {{ isProcessingDre ? 'Cruzando Matrizes...' : 'Gerar DRE da Operação' }}
+                        </button>
+                    </div>
                 </div>
 
                 <!-- ============================================== -->
@@ -260,9 +269,13 @@ const getDreBadgeClass = (status) => {
                             <p class="text-xl font-black text-red-600 mt-1">R$ {{ formatCurrency(resumoDre?.total_custo_real || 0) }}</p>
                             <p class="text-[10px] text-red-500 mt-1 font-bold">Ideal: R$ {{ formatCurrency(resumoDre?.total_custo_ideal || 0) }}</p>
                         </div>
-                        <div class="bg-gray-900 text-white p-4 rounded-lg border-l-4 border-emerald-500 shadow-sm">
+                        <div class="bg-gray-900 text-white p-4 rounded-lg border-l-4 border-emerald-500 shadow-sm relative overflow-hidden">
+                            <div class="absolute right-3 top-3 text-right">
+                                <span class="block text-[10px] uppercase font-bold text-gray-400">Margem Líquida</span>
+                                <span class="text-lg font-black" :class="(resumoDre?.margem_global || 0) < 0 ? 'text-red-400' : 'text-emerald-400'">{{ resumoDre?.margem_global || 0 }}%</span>
+                            </div>
                             <p class="text-xs font-bold uppercase text-gray-400">Spread Bruto Real</p>
-                            <p class="text-2xl font-black mt-1" :class="(resumoDre?.lucro_bruto_real || 0) < 0 ? 'text-red-400' : 'text-emerald-400'">
+                            <p class="text-xl font-black mt-1" :class="(resumoDre?.lucro_bruto_real || 0) < 0 ? 'text-red-400' : 'text-emerald-400'">
                                 R$ {{ formatCurrency(resumoDre?.lucro_bruto_real || 0) }}
                             </p>
                             <p class="text-[10px] text-gray-400 mt-1 font-bold">
@@ -325,7 +338,7 @@ const getDreBadgeClass = (status) => {
                                             </div>
                                         </div>
                                         <div v-else class="mb-2">
-                                            <span class="bg-red-100 text-red-800 text-[8px] font-bold px-1 rounded border border-red-300">BWT NÃO LOCALIZADO</span>
+                                            <span class="bg-red-100 text-red-800 text-[8px] font-bold px-1 rounded border border-red-300">BWT NÃO LOCALIZADA</span>
                                         </div>
 
                                         <!-- ARQUIVOS E4LOG -->

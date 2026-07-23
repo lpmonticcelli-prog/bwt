@@ -160,6 +160,7 @@
                     <div style="font-size: 8px; color: #334155; text-transform: uppercase; font-weight: bold;">Spread Bruto Real (DRE)</div>
                     <div style="font-size: 16px; font-weight: 900; color: {{ $resumo['lucro_bruto_real'] < 0 ? '#dc2626' : '#059669' }}; margin-top: 2px;">
                         R$ {{ number_format($resumo['lucro_bruto_real'], 2, ',', '.') }}
+                        <span style="font-size: 10px;">({{ number_format($resumo['margem_global'] ?? 0, 2, ',', '.') }}%)</span>
                     </div>
                     <div style="font-size: 8px; color: #64748b; margin-top: 2px; font-weight: bold;">Ideal SLA: R$ {{ number_format($resumo['lucro_bruto_ideal'], 2, ',', '.') }}</div>
                 </td>
