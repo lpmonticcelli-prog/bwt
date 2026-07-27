@@ -5,7 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\City;
 use App\Models\Faturamento;
-use App\Services\CalculadoraReceitaService; // Injeção do nosso Service Nível God
+use App\Services\CalculadoraReceitaService; 
+use App\Services\BsoftSyncService; 
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
@@ -14,13 +15,68 @@ use Exception;
 
 class FaturamentoController extends Controller
 {
-    public function index()
+    // =========================================================================
+    // EXIBIÇÃO DA TELA (BUSCA O MÊS ATUAL PARA O FRONTEND FILTRAR AS QUINZENAS)
+    // =========================================================================
+    public function index(Request $request)
     {
+        $fechamentoId = $request->query('fechamento_id');
+
+        $query = Faturamento::query();
+        
+        if ($fechamentoId) {
+            $query->where('fechamento_periodo_id', $fechamentoId);
+        } else {
+            // Buscamos o mês inteiro. O Vue.js se encarregará de separar as quinzenas.
+            $hoje = \Carbon\Carbon::now('America/Sao_Paulo');
+            $inicio = $hoje->copy()->startOfMonth()->format('Y-m-d');
+            $fim    = $hoje->copy()->endOfMonth()->format('Y-m-d');
+            
+            $query->whereBetween('data_emissao', [$inicio, $fim]);
+        }
+
+        $faturamentos = $query->orderBy('data_emissao', 'desc')->get();
+
+        $fechamentos = [];
+        if (class_exists('\App\Models\Fechamento')) {
+            $fechamentos = \App\Models\Fechamento::orderBy('id', 'desc')->get()->map(function($f) {
+                return [
+                    'id' => $f->id,
+                    'titulo' => $f->nome ?? $f->titulo ?? 'Lote ' . $f->id
+                ];
+            });
+        }
+
         return Inertia::render('Faturamento/Index', [
-            'faturamentosProcessados' => Faturamento::orderBy('id', 'desc')->get()
+            'fechamento_id' => $fechamentoId,
+            'fechamentos' => $fechamentos,
+            'fretesDetalhados' => $faturamentos,
+            'faturamentosDetalhados' => $faturamentos,
+            'cruzamentoViagens' => [],
+            'resumoFaturamento' => [], // Otimizado: O Vue já calcula tudo no frontend
+            'resumoAuditoria' => [],     
         ]);
     }
 
+    // =========================================================================
+    // SINCRONIZAÇÃO GLOBAL API BSOFT 
+    // =========================================================================
+    public function sincronizarGeral(Request $request)
+    {
+        try {
+            $servico = new BsoftSyncService();
+            // A Bsoft buscará os últimos 15 a 30 dias para garantir o mês vigente
+            $resultado = $servico->sincronizarNotasRecentes(); 
+            
+            return response()->json($resultado);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    // =========================================================================
+    // PROCESSAMENTO DE UPLOAD DE XML (SSW)
+    // =========================================================================
     public function processar(Request $request)
     {
         try {
@@ -35,7 +91,6 @@ class FaturamentoController extends Controller
             foreach ($request->file('xml_files') as $file) {
                 if (strtolower($file->getClientOriginalExtension()) !== 'xml') continue;
 
-                // Leitura Limpa do XML
                 $xmlContent = file_get_contents($file->getPathname());
                 $xmlContent = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
                 $xmlObj = simplexml_load_string($xmlContent);
@@ -53,7 +108,6 @@ class FaturamentoController extends Controller
 
                 if (!$cidadeDestino) continue;
 
-                // Cruzamento Geográfico
                 $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
 
                 if (!$city) { $errosDetetive[] = "[{$cidadeDestino} não cadastrada]"; continue; }
@@ -71,9 +125,6 @@ class FaturamentoController extends Controller
 
                 $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
 
-                // =========================================================================
-                // MATEMÁTICA DO CUSTO (E4LOG) - Apenas para projeção de Lucro
-                // =========================================================================
                 $custoFixo = (float) $ruleE4log->fixed_value;
                 $custoPct = (float) $ruleE4log->excess_percentage / 100;
                 $custoFreteBase = max($custoFixo, ($valorCarga * $custoPct));
@@ -87,20 +138,24 @@ class FaturamentoController extends Controller
                 $custoTotalE4log = $custoFreteBase + $custoTde;
                 if ($tipoCTe == '1') { $custoFreteBase = 0; $custoTotalE4log = $custoTde; }
 
-                // =========================================================================
-                // ARQUITETURA LIMPA: CHAMADA AO SERVICE PARA MATEMÁTICA DA RECEITA
-                // =========================================================================
                 $matematicaSolfacil = CalculadoraReceitaService::calcularSolfacil($ruleBwt, $valorCarga, $temTde, $tipoOperacao);
+                
+                $criterioBusca = ($nfeChave !== 'N/A' && !empty($nfeChave)) 
+                    ? ['nfe_chave' => Str::limit($nfeChave, 250, '')]
+                    : ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')];
 
-                // Cálculo do Lucro (Receita Efetivamente Faturada - Custo da Transportadora)
-                $lucroLiquido = $receitaBwtXML - $custoTotalE4log;
+                $freteExistente = Faturamento::where($criterioBusca)->first();
+                
+                $custoDefinitivo = $freteExistente && $freteExistente->custo_e4log > 0 
+                                    ? $freteExistente->custo_e4log 
+                                    : $custoTotalE4log;
 
-                // =========================================================================
-                // PERSISTÊNCIA NA BASE DE DADOS
-                // =========================================================================
+                $lucroLiquido = $receitaBwtXML - $custoDefinitivo;
+
                 $resultados[] = Faturamento::updateOrCreate(
-                    ['arquivo' => Str::limit($file->getClientOriginalName(), 250, '')], 
+                    $criterioBusca, 
                     [
+                        'arquivo' => Str::limit($file->getClientOriginalName(), 250, ''),
                         'fechamento_periodo_id' => $request->input('fechamento_id'),
                         'destino' => Str::limit($cidadeDestino, 150, ''),
                         'regra' => Str::limit($regionBwt->name . " (Sol Fácil)", 100, ''),
@@ -114,14 +169,12 @@ class FaturamentoController extends Controller
                         
                         'custo_frete_base' => $custoFreteBase,
                         'custo_tde' => $custoTde,
-                        'custo_total' => $custoTotalE4log,
+                        'custo_total' => $custoDefinitivo, 
                         
-                        // Valores Desmembrados Pelo Service:
                         'receita_frete_base' => $matematicaSolfacil['frete_base'],
                         'receita_tde' => $matematicaSolfacil['tde'],
                         'receita_icms' => $matematicaSolfacil['icms'],
                         'receita_teorica' => $matematicaSolfacil['total'],
-                        
                         'receita_real' => $receitaBwtXML,
                         'lucro' => $lucroLiquido
                     ]
@@ -137,29 +190,21 @@ class FaturamentoController extends Controller
                 throw new Exception($motivo);
             }
 
-            if ($request->wantsJson()) {
-                return response()->json(['success' => true]);
-            }
+            if ($request->wantsJson()) return response()->json(['success' => true]);
             return redirect()->route('faturamento.index');
 
         } catch (Throwable $e) {
-            if ($request->wantsJson()) {
-                return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422);
-            }
+            if ($request->wantsJson()) return response()->json(['error' => 'ERRO: ' . $e->getMessage()], 422);
             return back()->withErrors(['erro_fatal' => 'DETALHE DO ERRO: ' . $e->getMessage()]);
         }
     }
 
-    // =========================================================================
-    // FUNÇÕES EXTRATORAS DE XML (HELPERS)
-    // =========================================================================
     private function getBaseNode($data) { if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte']; if (isset($data['infCte'])) return $data['infCte']; return null; }
     private function extractCity($data) { $base = $this->getBaseNode($data); if ($base && isset($base['dest']['enderDest']['xMun'])) return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')); return null; }
     private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; return 0.00; }
     private function extractFreightValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['vPrest']['vTPrest'])) return (float) $base['vPrest']['vTPrest']; return 0.00; }
     private function extractObs($data) { $base = $this->getBaseNode($data); if ($base && isset($base['compl']['xObs'])) return (string) $base['compl']['xObs']; return ''; }
     private function extractTipoCTe($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; return '0'; }
-    
     private function extractNfe($data) {
         $base = $this->getBaseNode($data);
         if ($base && isset($base['infCTeNorm']['infDoc']['infNFe'])) {
@@ -169,7 +214,6 @@ class FaturamentoController extends Controller
         }
         return 'N/A';
     }
-    
     private function extractProduto($data) {
         $base = $this->getBaseNode($data);
         if ($base && isset($base['infCTeNorm']['infCarga']['proPred'])) {
@@ -179,13 +223,11 @@ class FaturamentoController extends Controller
         }
         return 'N/A';
     }
-
     private function extractDataEmissao($data) {
         $base = $this->getBaseNode($data);
         if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10);
         return null;
     }
-    
     private function extractTipoOperacao($observacoes, $tipoCTe) {
         if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução';
         if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega';

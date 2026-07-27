@@ -2,10 +2,14 @@
 
 namespace App\Services;
 
-use App\Models\Frete;
+use App\Models\City;
 use App\Models\Faturamento;
+use App\Services\CalculadoraReceitaService;
 use Illuminate\Support\Facades\Log;
-use Carbon\Carbon; // <-- Importação do motor de datas do Laravel
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
+use Carbon\Carbon;
 
 class BsoftSyncService
 {
@@ -20,203 +24,268 @@ class BsoftSyncService
 
     public function __construct()
     {
+        // ==============================================================
+        // MÁGICA DE INFRAESTRUTURA: Diz ao servidor para não dar erro 500
+        // e dar todo o tempo do mundo para o robô baixar as 10.000 notas.
+        // ==============================================================
+        set_time_limit(0); 
+        ini_set('memory_limit', '512M');
+        
         $this->login();
     }
 
     private function login()
     {
-        $curl = curl_init();
-        curl_setopt_array($curl, [
-            CURLOPT_URL => $this->baseUrl . '/login',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'POST',
-            CURLOPT_POSTFIELDS => json_encode($this->credenciais),
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
-            CURLOPT_SSL_VERIFYPEER => false 
-        ]);
-
-        $response = curl_exec($curl);
-        $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-        curl_close($curl);
-
-        if ($httpCode === 200) {
-            $data = json_decode($response, true);
-            $this->token = $data['access_token'] ?? null;
-        } else {
-            Log::error("BsoftSync: Falha no login da API. Código: " . $httpCode);
+        try {
+            $response = Http::withoutVerifying()->acceptJson()->timeout(15)->post($this->baseUrl . '/login', $this->credenciais);
+            if ($response->successful()) {
+                $this->token = $response->json('access_token');
+            }
+        } catch (\Exception $e) {
+            Log::error("BsoftSync [ERRO LOGIN]: " . $e->getMessage());
         }
     }
 
-    public function atualizarBaixasBwt($fechamentoId)
+    private function getXmlCte($id_cte) 
     {
-        if (!$this->token) return ['success' => false, 'message' => 'Sem token de autenticação da Bsoft'];
+        if (!$this->token) return null;
+        try {
+            $response = Http::withoutVerifying()->withToken($this->token)->acceptJson()->timeout(15)->get($this->baseUrl . '/cte/' . $id_cte . '/xml');
+            if ($response->successful()) {
+                $body = $response->body();
+                if (strpos($body, '<?xml') !== false) return $body;
+                $dados = $response->json();
+                if (is_array($dados)) {
+                    if (isset($dados['xml'])) return base64_decode($dados['xml']); 
+                    if (isset($dados['data']['xml'])) return base64_decode($dados['data']['xml']);
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error("BsoftSync [ERRO DOWNLOAD XML $id_cte]: " . $e->getMessage());
+        }
+        return null;
+    }
 
-        $fretesAguardandoBaixa = Frete::where('fechamento_periodo_id', $fechamentoId)
-            ->whereNull('data_entrega')
-            ->get();
+    public function sincronizarNotasRecentes() 
+    {
+        Log::info("==================================================");
+        Log::info("🚀 INICIANDO SINCRONIZAÇÃO BSOFT (MANUAL)");
 
-        if ($fretesAguardandoBaixa->isEmpty()) {
-            return ['success' => true, 'message' => 'Nenhuma entrega pendente de baixa neste lote.'];
+        if (!$this->token) {
+            Log::error("❌ Falha de Autenticação.");
+            return ['success' => false, 'message' => 'Falha na autenticação com a Bsoft.'];
         }
 
-        $atualizadas = 0;
-        $errosDiagnostico = [];
+        $hoje = Carbon::now('America/Sao_Paulo');
+        
+        if ($hoje->day <= 15) {
+            $dataInicial = $hoje->copy()->startOfMonth()->format('d/m/Y');
+            $dataFinal   = $hoje->format('d/m/Y'); 
+        } else {
+            $dataInicial = $hoje->copy()->day(16)->format('d/m/Y');
+            $dataFinal   = $hoje->format('d/m/Y'); 
+        }
 
-        // Define a Data de Hoje cravada no Fuso Horário do Brasil (PR/BR)
-        $hojeReal = Carbon::now('America/Sao_Paulo');
+        Log::info("📅 Período Alvo: $dataInicial até $dataFinal");
 
-        foreach ($fretesAguardandoBaixa as $frete) {
-            
-            // Extrai o Número ou a Chave do nome do arquivo XML
-            preg_match('/(\d+)/', $frete->arquivo, $matches);
-            $identificador = $matches[1] ?? null;
+        $offset = 0;
+        $quantidade = 500; 
+        $listaCompleta = [];
+        $paginasBaixadas = 0;
 
-            if (!$identificador) continue;
-
-            // =====================================================================
-            // MOTOR DE DATAS CARBON (Fuso Horário BRASIL + Proteção Anti-Falhas)
-            // =====================================================================
-            if ($frete->data_emissao) {
-                $dataEmissao = Carbon::parse($frete->data_emissao, 'America/Sao_Paulo');
-            } else {
-                $dataEmissao = $hojeReal->copy();
-            }
-            
-            $dataInicial = $dataEmissao->copy()->subDays(30);
-            $dataFinal   = $dataEmissao->copy()->addDays(30);
-            
-            // PROTEÇÃO 1: Se a projeção final for no futuro, trava no dia de hoje
-            if ($dataFinal->greaterThan($hojeReal)) {
-                $dataFinal = $hojeReal->copy();
-            }
-
-            // PROTEÇÃO 2: Se o XML for de 2026, a Data Inicial ficaria maior que a Final (2024).
-            // Corrigimos empurrando a Inicial para 60 dias atrás da Final travada.
-            if ($dataInicial->greaterThan($dataFinal)) {
-                $dataInicial = $dataFinal->copy()->subDays(60);
-            }
-
-            // Formatação oficial Bsoft V2 Desktop
-            $parametros = [
-                'data_inicial' => $dataInicial->format('d/m/Y'),
-                'data_final'   => $dataFinal->format('d/m/Y'),
-                'quantidade'   => 50
-            ];
-
-            if (strlen($identificador) == 44) {
-                $parametros['chave'] = $identificador;
-            } else {
-                $parametros['numero'] = (int)$identificador;
-            }
-            
-            $queryString = http_build_query($parametros);
-            $url = $this->baseUrl . '/cte?' . $queryString . '&include=ocorrencias';
-            
-            $curl = curl_init();
-            curl_setopt_array($curl, [
-                CURLOPT_URL => $url,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CUSTOMREQUEST => 'GET',
-                CURLOPT_HTTPHEADER => [
-                    'Authorization: Bearer ' . $this->token,
-                    'Accept: application/json'
-                ],
-                CURLOPT_SSL_VERIFYPEER => false
-            ]);
-
-            $response = curl_exec($curl);
-            $httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-            curl_close($curl);
-
-            // Tratamento de Erros da API
-            if ($httpCode !== 200) {
-                $dadosErro = json_decode($response, true);
-                $msgAPI = 'Requisição Inválida';
-                if ($dadosErro) {
-                    $msgErroArray = $dadosErro['errors'] ?? [];
-                    if (!empty($msgErroArray) && isset($msgErroArray[0]['erro'])) {
-                        $msgAPI = $msgErroArray[0]['erro'];
-                    } else {
-                        $msgAPI = $dadosErro['message'] ?? $dadosErro['title'] ?? json_encode($dadosErro);
-                    }
-                }
+        try {
+            do {
+                Log::info("📡 Buscando lote de notas na Bsoft (Offset: $offset)...");
                 
-                $errosDiagnostico[] = "API rejeitou CT-e {$identificador} (Cod {$httpCode}: {$msgAPI})";
-                continue; 
+                $urlComFiltros = $this->baseUrl . "/cte?data_inicial={$dataInicial}&data_final={$dataFinal}&quantidade={$quantidade}&offset={$offset}&status=100";
+
+                $response = Http::withoutVerifying()
+                    ->withToken($this->token)
+                    ->acceptJson()
+                    ->timeout(60) // Aumentamos o limite para a API Bsoft
+                    ->get($urlComFiltros);
+
+                if (!$response->successful()) {
+                    Log::error("❌ Erro HTTP " . $response->status());
+                    return ['success' => false, 'message' => "Erro na API da Bsoft (HTTP " . $response->status() . ")."];
+                }
+
+                $dadosCte = $response->json();
+                $loteAtual = isset($dadosCte['data']) ? $dadosCte['data'] : (is_array($dadosCte) ? $dadosCte : []);
+                
+                $qtdLote = count($loteAtual);
+                Log::info("✅ Lote recebido com $qtdLote notas.");
+
+                if (!empty($loteAtual)) {
+                    $listaCompleta = array_merge($listaCompleta, $loteAtual);
+                }
+
+                $offset += $quantidade;
+                $paginasBaixadas++;
+
+                // Aumentado o limite real e visualmente
+                if ($paginasBaixadas >= 200) {
+                    Log::warning("⚠️ Trava de Segurança Acionada! Abortando paginação no limite de 10.000 notas.");
+                    break;
+                }
+
+            } while ($qtdLote == $quantidade); 
+
+            $totalBaixado = count($listaCompleta);
+            Log::info("📦 Total de notas encontradas no período: $totalBaixado");
+
+            if (empty($listaCompleta)) {
+                return ['success' => true, 'message' => "Sincronização concluída. Nenhuma nota encontrada."];
             }
 
-            $dadosCte = json_decode($response, true);
+            Storage::disk('local')->makeDirectory('xml_e4log/bwt_processados');
+            $processadas = 0; $atualizadas = 0; 
             
-            if (isset($dadosCte['data']) && count($dadosCte['data']) > 0) {
-                $cteApi = $dadosCte['data'][0]; 
-                $dataEntregaEncontrada = null;
+            Log::info("⚙️ Iniciando processamento individual das notas...");
 
-                // Lê a data nativa ou o Dicionário de EDI Logístico
-                if (!empty($cteApi['data_entrega'])) {
-                    $dataEntregaEncontrada = $cteApi['data_entrega'];
-                } 
-                else if (isset($cteApi['dados_entrega']) && !empty($cteApi['dados_entrega']['data_baixa'])) {
-                    $dataEntregaEncontrada = $cteApi['dados_entrega']['data_baixa'];
-                }
-                else if (!empty($cteApi['ocorrencias'])) {
-                    $dicionarioEDI = ['entreg', 'baixa', 'realizad', 'concluid', 'recebid', 'edi 01', 'ocorrência 01', 'ocorrencia 01', 'oc 01'];
-                    foreach ($cteApi['ocorrencias'] as $oc) {
-                        $descricao = strtolower($oc['descricao'] ?? '');
-                        $codigo = (string)($oc['codigo'] ?? '');
-                        
-                        $isEntregue = ($codigo === '01' || $codigo === '100');
-                        if (!$isEntregue) {
-                            foreach ($dicionarioEDI as $jargao) {
-                                if (str_contains($descricao, $jargao)) {
-                                    $isEntregue = true;
-                                    break;
-                                }
-                            }
-                        }
+            foreach ($listaCompleta as $index => $cteApi) {
+                $chaveCte = $cteApi['chave_acesso'] ?? $cteApi['chave'] ?? null;
+                $idCte = $cteApi['id'] ?? null; 
+                $valorTotal = $cteApi['valor_total'] ?? 0;
+                
+                if (!$chaveCte || !$idCte) continue;
 
-                        if ($isEntregue && isset($oc['data_ocorrencia'])) {
-                            $dataEntregaEncontrada = $oc['data_ocorrencia'];
-                            break; 
-                        }
+                $numAtual = $index + 1;
+                $nomeArquivo = 'E4LOG_' . $chaveCte . '.xml';
+                $caminhoArquivo = 'xml_e4log/bwt_processados/' . $nomeArquivo;
+
+                if (Storage::disk('local')->exists($caminhoArquivo)) {
+                    $xmlContent = Storage::disk('local')->get($caminhoArquivo);
+                } else {
+                    Log::info("[$numAtual/$totalBaixado] 🌐 Baixando XML da API: $chaveCte");
+                    $xmlContent = $this->getXmlCte($idCte);
+                    if ($xmlContent && strpos($xmlContent, 'ERRO_API') === false) {
+                        Storage::disk('local')->put($caminhoArquivo, $xmlContent);
                     }
                 }
 
-                if ($dataEntregaEncontrada) {
-                    // Formata a data devolução Bsoft (DD/MM/YYYY) para o banco do ioapps (YYYY-MM-DD)
-                    $dataFormatada = Carbon::createFromFormat('d/m/Y H:i', $dataEntregaEncontrada, 'America/Sao_Paulo')->format('Y-m-d');
-                    
-                    $frete->data_entrega = $dataFormatada;
-                    $frete->save();
-
-                    // Replica a baixa também para o faturamento Sol Fácil simultaneamente
-                    Faturamento::where('fechamento_periodo_id', $fechamentoId)
-                        ->where('valor_carga', $frete->valorNF)
-                        ->where('destino', $frete->destino)
-                        ->update(['data_entrega' => $dataFormatada]);
-
-                    $atualizadas++;
-                } else {
-                    $errosDiagnostico[] = "CT-e {$identificador}: AINDA SEM BAIXA (Em trânsito).";
+                if (!$xmlContent || strpos($xmlContent, 'ERRO_API') === 0) {
+                    continue;
                 }
-            } else {
-                $errosDiagnostico[] = "CT-e {$identificador}: Não encontrado na janela de busca.";
-            }
-        }
 
-        // Mensagem Executiva para a Dashboard
-        $msgExtra = "";
-        if (!empty($errosDiagnostico)) {
-            $errosUnicos = array_unique($errosDiagnostico);
-            $msgExtra = " | Diagnóstico: " . implode(" | ", array_slice($errosUnicos, 0, 3));
-            if (count($errosUnicos) > 3) {
-                $msgExtra .= " e mais " . (count($errosUnicos) - 3) . " notas analisadas...";
-            }
-        }
+                $xmlLimpo = str_replace(['xmlns=', 'cte:', 'nfe:'], ['ns=', '', ''], $xmlContent);
+                $xmlObj = @simplexml_load_string($xmlLimpo);
+                $data = $xmlObj ? json_decode(json_encode($xmlObj), true) : [];
+                
+                $cidadeDestino = $this->extractCity($data) ?: 'DESCONHECIDA';
+                $dataEmissao = $this->extractDataEmissao($data) ?? Carbon::now('America/Sao_Paulo')->format('Y-m-d');
+                $valorCarga = $this->extractInvoiceValue($data);
+                $observacoes = strtoupper($this->extractObs($data));
+                $tipoCTe = $this->extractTipoCTe($data);
+                $nfeChave = $this->extractNfe($data);
+                $produto = $this->extractProduto($data);
+                $tipoOperacao = $this->extractTipoOperacao($observacoes, $tipoCTe);
 
-        return ['success' => true, 'message' => "Sincronização concluída: $atualizadas baixas efetuadas.\n\n$msgExtra"];
+                $criterioBusca = ($nfeChave !== 'N/A' && !empty($nfeChave)) ? ['nfe_chave' => Str::limit($nfeChave, 250, '')] : ['arquivo' => Str::limit($nomeArquivo, 250, '')];
+
+                $freteExistente = Faturamento::where($criterioBusca)->first();
+
+                if ($freteExistente) {
+                    $freteExistente->e4log_faturado = true;
+                    $freteExistente->custo_e4log = $valorTotal;
+                    $freteExistente->custo_total = $valorTotal;
+                    $receitaReferencia = $freteExistente->receita_real > 0 ? $freteExistente->receita_real : $freteExistente->receita_teorica;
+                    $freteExistente->lucro = $receitaReferencia - $valorTotal;
+                    $freteExistente->save();
+                    $atualizadas++;
+                    continue; 
+                }
+
+                $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
+                $receitaFreteBase = 0; $receitaTde = 0; $receitaIcms = 0; $receitaTeorica = 0; $regraNome = 'E4LOG Automática (Sem Região)';
+                $temTde = str_contains($observacoes, 'TDE') || str_contains($observacoes, 'RURAL') || $tipoCTe == '1';
+
+                if ($city && $city->regions->isNotEmpty()) {
+                    $regionBwt = $city->regions->filter(fn($r) => strtolower($r->context) === 'bwt')->first();
+                    if ($regionBwt && $regionBwt->pricingRules->isNotEmpty()) {
+                        $ruleBwt = $regionBwt->pricingRules->first();
+                        $matematicaSolfacil = CalculadoraReceitaService::calcularSolfacil($ruleBwt, $valorCarga, $temTde, $tipoOperacao);
+                        $receitaFreteBase = $matematicaSolfacil['frete_base'];
+                        $receitaTde = $matematicaSolfacil['tde'];
+                        $receitaIcms = $matematicaSolfacil['icms'];
+                        $receitaTeorica = $matematicaSolfacil['total'];
+                        $regraNome = $regionBwt->name . " (Sol Fácil)";
+                    }
+                }
+
+                Faturamento::create([
+                    'arquivo' => Str::limit($nomeArquivo, 250, ''),
+                    'destino' => Str::limit($cidadeDestino, 150, ''),
+                    'regra' => Str::limit($regraNome, 100, ''),
+                    'tipo_operacao' => Str::limit($tipoOperacao, 50, ''),
+                    'data_emissao' => $dataEmissao,
+                    'tipo_cte' => Str::limit($tipoOperacao, 100, ''),
+                    'nfe_chave' => Str::limit($nfeChave, 250, ''),
+                    'produto' => Str::limit($produto, 250, ''),
+                    'valor_carga' => $valorCarga,
+                    'e4log_faturado' => true,
+                    'custo_e4log' => $valorTotal,
+                    
+                    // CAMPOS OBRIGATÓRIOS DO BANCO
+                    'custo_frete_base' => 0,
+                    'custo_tde' => 0,
+                    'custo_total' => $valorTotal,
+                    
+                    'receita_frete_base' => $receitaFreteBase,
+                    'receita_tde' => $receitaTde,
+                    'receita_icms' => $receitaIcms,
+                    'receita_teorica' => $receitaTeorica,
+                    'receita_real' => 0,
+                    'lucro' => $receitaTeorica - $valorTotal, 
+                ]);
+                
+                $processadas++;
+            }
+
+            Log::info("🏁 FINALIZADO: Salvas: $processadas | Atualizadas: $atualizadas");
+            Log::info("==================================================");
+
+            // CORREÇÃO: Usando a data formatada direto na mensagem! Adeus erro Carbon!
+            return ['success' => true, 'message' => "🚀 Sucesso! (Quinzena: $dataInicial a $dataFinal)\n\nBaixadas da Bsoft: $totalBaixado notas\nNovas Salvas no Banco: $processadas"];
+
+        } catch (\Throwable $e) {
+            Log::error("❌ BsoftSync Falha Geral: " . $e->getMessage());
+            return ['success' => false, 'message' => "ERRO DO LARAVEL:\n\n" . $e->getMessage()];
+        }
+    }
+
+    private function getBaseNode($data) { if (isset($data['CTe']['infCte'])) return $data['CTe']['infCte']; if (isset($data['infCte'])) return $data['infCte']; return null; }
+    private function extractCity($data) { $base = $this->getBaseNode($data); if ($base && isset($base['dest']['enderDest']['xMun'])) return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' ')); return null; }
+    private function extractInvoiceValue($data) { $base = $this->getBaseNode($data); if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) return (float) $base['infCTeNorm']['infCarga']['vCarga']; return 0.00; }
+    private function extractObs($data) { $base = $this->getBaseNode($data); if ($base && isset($base['compl']['xObs'])) return (string) $base['compl']['xObs']; return ''; }
+    private function extractTipoCTe($data) { $base = $this->getBaseNode($data); if ($base && isset($base['ide']['tpCTe'])) return (string) $base['ide']['tpCTe']; return '0'; }
+    private function extractNfe($data) {
+        $base = $this->getBaseNode($data);
+        if ($base && isset($base['infCTeNorm']['infDoc']['infNFe'])) {
+            $nfe = $base['infCTeNorm']['infDoc']['infNFe'];
+            if (isset($nfe['chave'])) return (string) $nfe['chave'];
+            if (is_array($nfe) && isset($nfe[0]['chave'])) return (string) $nfe[0]['chave'];
+        }
+        return 'N/A';
+    }
+    private function extractProduto($data) {
+        $base = $this->getBaseNode($data);
+        if ($base && isset($base['infCTeNorm']['infCarga']['proPred'])) {
+            $prod = $base['infCTeNorm']['infCarga']['proPred'];
+            if (is_array($prod)) return implode(" ", $prod);
+            return (string) $prod;
+        }
+        return 'N/A';
+    }
+    private function extractDataEmissao($data) {
+        $base = $this->getBaseNode($data);
+        if ($base && isset($base['ide']['dhEmi'])) return substr((string) $base['ide']['dhEmi'], 0, 10);
+        return null;
+    }
+    private function extractTipoOperacao($observacoes, $tipoCTe) {
+        if (str_contains($observacoes, 'DEVOLUCAO') || str_contains($observacoes, 'RETORNO')) return 'Devolução';
+        if (str_contains($observacoes, 'REENTREGA')) return 'Reentrega';
+        if ($tipoCTe == '1') return 'Complemento';
+        return 'Entrega';
     }
 }

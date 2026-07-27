@@ -35,7 +35,7 @@ const page = usePage();
                 <div>
                     <p class="px-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-3">Auditoria & Operação</p>
                     <div class="space-y-1">
-                        <Link href="/auditoria" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/auditoria') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
+                        <Link href="/auditoria" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/auditoria') && !page.url.startsWith('/auditoria-sla') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
                             <span class="text-lg">📉</span>
                             <span class="text-sm font-medium">Auditoria E4LOG</span>
                         </Link>
@@ -46,6 +46,11 @@ const page = usePage();
                         <Link href="/fechamentos" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/fechamentos') ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
                             <span class="text-lg">📤</span>
                             <span class="text-sm font-medium">Lançamentos (Upload)</span>
+                        </Link>
+                        <!-- NOVO LINK DO BUDGET AQUI (COMO PARTE DA INTELIGÊNCIA OPERACIONAL) -->
+                        <Link href="/budget" class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors group" :class="page.url.startsWith('/budget') ? 'bg-slate-800 text-white border-l-2 border-green-500' : 'text-slate-400 hover:text-white hover:bg-slate-800'">
+                            <span class="text-lg transition-opacity" :class="page.url.startsWith('/budget') ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'">📊</span>
+                            <span class="text-sm font-medium">Budget Financeiro</span>
                         </Link>
                     </div>
                 </div>
