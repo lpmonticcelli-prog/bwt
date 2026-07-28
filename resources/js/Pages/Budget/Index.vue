@@ -13,6 +13,51 @@ const props = defineProps({
 });
 
 // ==========================================
+// 🔒 TRAVA DE SEGURANÇA POR SENHA
+// ==========================================
+const isUnlocked = ref(false);
+const inputSenha = ref('');
+const erroSenha = ref('');
+
+// A senha mestre de segurança da tela
+const SENHA_MESTRE = '1234'; 
+
+const desbloquearPagina = () => {
+    if (inputSenha.value === SENHA_MESTRE) {
+        isUnlocked.value = true;
+        erroSenha.value = '';
+        sessionStorage.setItem('budget_unlocked', 'true');
+    } else {
+        erroSenha.value = 'Senha incorreta! Verifique a senha e tente novamente.';
+        inputSenha.value = '';
+    }
+};
+
+onMounted(() => {
+    if (sessionStorage.getItem('budget_unlocked') === 'true') {
+        isUnlocked.value = true;
+    }
+});
+
+// ==========================================
+// 📄 EXPORTAÇÃO PARA PDF (OFICIAL)
+// ==========================================
+const exportarPdf = (tipo) => {
+    // Redireciona para a rota do Laravel injetando o tipo (mensal ou trimestral)
+    window.open(route('budget.exportar-pdf') + '?tipo=' + tipo, '_blank');
+};
+
+// ==========================================
+// DIRETIVA DE AUTO-FOCUS E AUTO-SELECT
+// ==========================================
+const vFocus = {
+    mounted: (el) => {
+        el.focus();
+        setTimeout(() => el.select(), 10);
+    }
+};
+
+// ==========================================
 // CONTROLE DE EXPANSÃO (LINHAS E COLUNAS)
 // ==========================================
 const categoriasExpandidas = ref({});
@@ -21,9 +66,7 @@ const initCategorias = () => {
     if (props.budgetCategories) {
         props.budgetCategories.forEach(cat => {
             const name = (cat.categoria || '').toLowerCase();
-            // Evita resetar se a pessoa já abriu/fechou a aba
             if (categoriasExpandidas.value[cat.categoria] === undefined) {
-                // Abre as vendas e receitas por padrão
                 categoriasExpandidas.value[cat.categoria] = name.includes('venda') || name.includes('receita');
             }
         });
@@ -100,7 +143,7 @@ const getItemTotalTrimestre = (item, trimId) => {
 const getItemTotalAno = (item) => trimestres.reduce((acc, trim) => acc + getItemTotalTrimestre(item, trim.id), 0);
 
 // ==========================================
-// MOTOR DE BUSCA INTELIGENTE (SEM ENGESSAMENTO)
+// MOTOR DE BUSCA INTELIGENTE E TOTAIS GLOBAIS
 // ==========================================
 const matchCategorias = (keywords) => {
     return (props.budgetCategories || []).filter(c => {
@@ -122,30 +165,20 @@ const calcTotalTrimestre = (categoriasArr, trimId) => {
     return trim.meses.reduce((acc, m) => acc + calcTotal(categoriasArr, m), 0);
 };
 
-const calcTotalAno = (categoriasArr) => {
-    return trimestres.reduce((acc, trim) => acc + calcTotalTrimestre(categoriasArr, trim.id), 0);
-};
+const calcTotalAno = (categoriasArr) => trimestres.reduce((acc, trim) => acc + calcTotalTrimestre(categoriasArr, trim.id), 0);
 
-// ==========================================
-// CÁLCULOS TOTAIS GLOBAIS (RODAPÉ E CARDS)
-// ==========================================
-
-// RECEITAS (Busca Venda, Receita ou Faturamento)
 const getReceitaBruta = (mesNum) => calcTotal(matchCategorias(['venda', 'receita', 'faturamento']), mesNum);
 const getReceitaBrutaTrim = (trimId) => calcTotalTrimestre(matchCategorias(['venda', 'receita', 'faturamento']), trimId);
 const getReceitaBrutaAno = () => calcTotalAno(matchCategorias(['venda', 'receita', 'faturamento']));
 
-// IMPOSTOS (Busca Imposto ou Tributo)
 const getImpostos = (mesNum) => calcTotal(matchCategorias(['imposto', 'tributo']), mesNum);
 const getImpostosTrim = (trimId) => calcTotalTrimestre(matchCategorias(['imposto', 'tributo']), trimId);
 const getImpostosAno = () => calcTotalAno(matchCategorias(['imposto', 'tributo']));
 
-// RECEITA LÍQUIDA
 const getReceitaLiquida = (mesNum) => getReceitaBruta(mesNum) - getImpostos(mesNum);
 const getReceitaLiquidaTrim = (trimId) => getReceitaBrutaTrim(trimId) - getImpostosTrim(trimId);
 const getReceitaLiquidaAno = () => getReceitaBrutaAno() - getImpostosAno();
 
-// CUSTOS (Inteligência: Tudo que NÃO for Venda e NÃO for Imposto é somado no Custo!)
 const getCostCategories = () => {
     const excludedCats = matchCategorias(['venda', 'receita', 'faturamento', 'imposto', 'tributo']);
     const excludedNames = excludedCats.map(c => c.categoria);
@@ -156,7 +189,6 @@ const getCustoTotal = (mesNum) => calcTotal(getCostCategories(), mesNum);
 const getCustoTotalTrim = (trimId) => calcTotalTrimestre(getCostCategories(), trimId);
 const getCustoTotalAno = () => calcTotalAno(getCostCategories());
 
-// RESULTADOS E MARGENS
 const getResultado = (mesNum) => getReceitaLiquida(mesNum) - getCustoTotal(mesNum);
 const getResultadoTrim = (trimId) => getReceitaLiquidaTrim(trimId) - getCustoTotalTrim(trimId);
 const getResultadoAno = () => getReceitaLiquidaAno() - getCustoTotalAno();
@@ -175,21 +207,42 @@ const getMargemAno = () => {
 };
 
 // ==========================================
-// EDIÇÃO INLINE E TRAVA ANTIFRAUDE
+// EDIÇÃO FINANCEIRA (MÁSCARA AO VIVO 1 CLIQUE)
 // ==========================================
 const editingCell = ref(null);
-const editValue = ref(0);
+const editValueStr = ref("0,00");
 const isProcessing = ref(false);
 
 const startEditing = (item, mesNum, currentValue) => {
     if (props.budgetStatus === 'Congelado') return;
+    if (editingCell.value?.id === item.id && editingCell.value?.mes === mesNum) return;
+
     editingCell.value = { id: item.id, mes: mesNum };
-    editValue.value = currentValue ? parseFloat(currentValue) : 0;
+    
+    let numericValue = currentValue ? parseFloat(currentValue) : 0;
+    let formatted = numericValue.toFixed(2).replace('.', ',');
+    formatted = formatted.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+    
+    editValueStr.value = formatted;
+};
+
+const handleInput = (event) => {
+    let value = event.target.value.replace(/\D/g, "");
+    if (!value) value = "0";
+    
+    value = (parseInt(value, 10) / 100).toFixed(2);
+    value = value.replace(".", ",");
+    value = value.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
+    
+    editValueStr.value = value;
 };
 
 const saveEdit = (item, mesNum) => {
     if (editingCell.value && props.budgetStatus !== 'Congelado') {
-        router.put(route('budget.item.update', item.id), { mes: mesNum, valor: editValue.value }, {
+        let rawVal = editValueStr.value.replace(/\./g, '').replace(',', '.');
+        let numericVal = parseFloat(rawVal) || 0;
+
+        router.put(route('budget.item.update', item.id), { mes: mesNum, valor: numericVal }, {
             preserveScroll: true,
             onSuccess: () => { editingCell.value = null; }
         });
@@ -197,36 +250,33 @@ const saveEdit = (item, mesNum) => {
 };
 
 // ==========================================
-// AÇÕES DOS BOTÕES MÁGICOS
+// AÇÕES DOS BOTÕES EXTRAS
 // ==========================================
 const freezeBudget = () => {
-    if (confirm('🔒 ATENÇÃO DIRETORIA: Tem certeza que deseja CONGELAR este Orçamento?\n\nApós o congelamento, NENHUM valor poderá ser editado.')) {
+    if (confirm('🔒 ATENÇÃO DIRETORIA: Tem certeza que deseja CONGELAR este Orçamento?')) {
         isProcessing.value = true;
         router.post(route('budget.congelar', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
 
 const unfreezeBudget = () => {
-    if (confirm('⚠️ ALERTA DE SEGURANÇA: Tem certeza que deseja DESTRAVAR este Orçamento?\n\nIsso reabrirá o documento oficial para edições.')) {
+    if (confirm('⚠️ ALERTA DE SEGURANÇA: Tem certeza que deseja DESTRAVAR este Orçamento?')) {
         isProcessing.value = true;
         router.post(route('budget.descongelar', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
 
 const runAI = () => {
-    if (confirm('✨ Deseja rodar o Motor Preditivo?\n\nO sistema vai analisar as contas e calculará o restante do ano usando regressão estatística.')) {
+    if (confirm('✨ Deseja rodar o Motor Preditivo?')) {
         isProcessing.value = true;
         router.post(route('budget.predict', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
 
 const undoAI = () => {
-    if (confirm('⏪ ALERTA: Deseja RESTAURAR o orçamento para o estado original?\n\nIsso apagará todas as projeções e edições manuais feitas, retornando a tabela exatamente para os números do início.')) {
+    if (confirm('⏪ ALERTA: Deseja RESTAURAR o orçamento para o estado original?')) {
         isProcessing.value = true;
-        router.post(route('budget.predict.undo', props.budgetId), {}, { 
-            preserveScroll: true, 
-            onFinish: () => { isProcessing.value = false; }
-        });
+        router.post(route('budget.predict.undo', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
 </script>
@@ -235,11 +285,50 @@ const undoAI = () => {
     <Head title="Budget Financeiro" />
 
     <ErpLayout>
-        <div class="py-8">
+        
+        <!-- 🔒 OVERLAY DE BLOQUEIO POR SENHA -->
+        <div v-if="!isUnlocked" class="min-h-[80vh] flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+            <div class="max-w-md w-full space-y-8 bg-white p-8 rounded-2xl shadow-xl border border-gray-200 text-center">
+                <div class="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center text-red-600">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-black text-gray-900 tracking-tight">Área Restrita: Budget Financeiro</h2>
+                    <p class="text-sm text-gray-500 mt-2">Digite a senha de segurança autorizada para visualizar o DRE e os indicadores estratégicos.</p>
+                </div>
+
+                <form @submit.prevent="desbloquearPagina" class="mt-8 space-y-4">
+                    <div>
+                        <input 
+                            type="password" 
+                            v-model="inputSenha" 
+                            placeholder="Digite a senha..."
+                            class="w-full text-center text-xl tracking-widest px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 font-bold"
+                            autofocus
+                        >
+                    </div>
+
+                    <p v-if="erroSenha" class="text-xs text-red-600 font-bold bg-red-50 py-2 rounded-lg">{{ erroSenha }}</p>
+
+                    <button 
+                        type="submit" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path></svg>
+                        Acessar Budget
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 📊 CONTEÚDO PRINCIPAL (EXIBIDO APÓS DESBLOQUEAR) -->
+        <div v-else class="py-8 printable-area">
             <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
                 
                 <!-- CABEÇALHO -->
-                <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex flex-col md:flex-row justify-between items-center">
+                <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex flex-col md:flex-row justify-between items-center no-print">
                     <div>
                         <h2 class="text-2xl font-black text-gray-800 tracking-tight flex items-center gap-2">
                             <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
@@ -248,30 +337,45 @@ const undoAI = () => {
                         <p class="text-sm text-gray-500 mt-1 ml-8">Gerenciamento e Projeções de Receitas e Custos Oficiais</p>
                     </div>
                     
-                    <div class="flex items-center gap-3 mt-4 md:mt-0">
-                        <!-- BOTÃO DESFAZER / RESTAURAR (Cinza) -->
+                    <div class="flex items-center gap-3 mt-4 md:mt-0 flex-wrap">
+                        
+                        <!-- NOVOS BOTÕES DE EXPORTAÇÃO PDF -->
+                        <div class="flex gap-2 mr-2">
+                            <button @click="exportarPdf('trimestral')" title="Resumo por Trimestres"
+                                class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                <span>PDF Trimestral</span>
+                            </button>
+                            
+                            <button @click="exportarPdf('mensal')" title="Detalhamento Mês a Mês"
+                                class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                <span>PDF Mensal</span>
+                            </button>
+                        </div>
+
                         <button v-if="budgetStatus !== 'Congelado'" @click="undoAI" :disabled="isProcessing" title="Restaurar Valores Originais"
                             class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
-                            <span class="hidden md:inline">Restaurar Original</span>
+                            <span class="hidden md:inline">Restaurar</span>
                         </button>
 
                         <button v-if="budgetStatus !== 'Congelado'" @click="runAI" :disabled="isProcessing"
                             class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                            {{ isProcessing ? 'Calculando...' : 'Motor Preditivo' }}
+                            {{ isProcessing ? 'Calculando...' : 'IA Preditiva' }}
                         </button>
 
                         <button v-if="budgetStatus !== 'Congelado'" @click="freezeBudget" :disabled="isProcessing"
                             class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                            {{ isProcessing ? 'Aguarde...' : 'Congelar Orçamento' }}
+                            {{ isProcessing ? 'Aguarde...' : 'Congelar' }}
                         </button>
 
                         <button v-if="budgetStatus === 'Congelado'" @click="unfreezeBudget" :disabled="isProcessing"
                             class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path></svg>
-                            {{ isProcessing ? 'Aguarde...' : 'Destravar Orçamento' }}
+                            {{ isProcessing ? 'Aguarde...' : 'Destravar' }}
                         </button>
                     </div>
                 </div>
@@ -305,12 +409,12 @@ const undoAI = () => {
 
                 <!-- TABELA INTELIGENTE -->
                 <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg border border-gray-200">
-                    <div class="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                    <div class="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center no-print">
                         <h3 class="text-lg font-bold text-gray-700">Previsto (Budget) vs Realizado</h3>
                         <div class="flex items-center gap-3">
                             <span class="text-xs text-blue-800 font-bold bg-blue-100 px-3 py-1.5 rounded-full shadow-sm flex items-center gap-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
-                                Dica: Clique nos Trimestres para expandir os meses
+                                Clique 1x no valor para editar
                             </span>
                         </div>
                     </div>
@@ -324,10 +428,10 @@ const undoAI = () => {
                                     <template v-for="trim in trimestres" :key="'th-trim-'+trim.id">
                                         <th scope="col" class="px-4 py-4 text-right cursor-pointer transition-colors border-l-2 border-gray-300 select-none shadow-sm"
                                             :class="trimestresExpandidos[trim.id] ? 'bg-blue-100 text-blue-900 border-blue-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'"
-                                            @click="toggleTrimestre(trim.id)" title="Clique para expandir/recolher">
+                                            @click="toggleTrimestre(trim.id)">
                                             <div class="flex items-center justify-end gap-1">
                                                 <span>{{ trim.nome }}</span>
-                                                <span class="text-base leading-none">{{ trimestresExpandidos[trim.id] ? '▾' : '▸' }}</span>
+                                                <span class="text-base leading-none no-print">{{ trimestresExpandidos[trim.id] ? '▾' : '▸' }}</span>
                                             </div>
                                         </th>
                                         
@@ -346,7 +450,7 @@ const undoAI = () => {
                                     <tr class="bg-gray-200/60 border-b">
                                         <td class="px-4 py-3 font-bold text-gray-800 uppercase flex items-center justify-between sticky left-0 z-10 bg-gray-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer hover:bg-gray-300" @click="toggleCategoria(grupo.categoria)">
                                             <span>{{ grupo.categoria }}</span>
-                                            <span class="text-gray-500 text-lg">{{ categoriasExpandidas[grupo.categoria] ? '▾' : '▸' }}</span>
+                                            <span class="text-gray-500 text-lg no-print">{{ categoriasExpandidas[grupo.categoria] ? '▾' : '▸' }}</span>
                                         </td>
                                         
                                         <template v-for="trim in trimestres" :key="'cat-trim-'+trim.id">
@@ -373,11 +477,20 @@ const undoAI = () => {
                                                 {{ formatCurrency(getItemTotalTrimestre(item, trim.id)) }}
                                             </td>
                                             <template v-if="trimestresExpandidos[trim.id]">
-                                                <td class="px-4 py-3 text-right whitespace-nowrap border-l border-gray-100" v-for="mesNum in trim.meses" :key="'item-mes-'+mesNum" @dblclick="startEditing(item, mesNum, item.valores ? item.valores[mesNum] : 0)">
+                                                <td class="px-4 py-3 text-right whitespace-nowrap border-l border-gray-100" v-for="mesNum in trim.meses" :key="'item-mes-'+mesNum" @click="startEditing(item, mesNum, item.valores ? item.valores[mesNum] : 0)">
                                                     <div v-if="editingCell?.id === item.id && editingCell?.mes === mesNum">
-                                                        <input type="number" step="0.01" v-model="editValue" @keyup.enter="saveEdit(item, mesNum)" @blur="saveEdit(item, mesNum)" class="w-24 px-2 py-1 text-sm border-blue-500 rounded focus:ring-blue-500 focus:border-blue-500 text-right shadow-sm" autofocus>
+                                                        <input 
+                                                            type="text" 
+                                                            v-model="editValueStr" 
+                                                            @input="handleInput"
+                                                            @keyup.enter="saveEdit(item, mesNum)" 
+                                                            @blur="saveEdit(item, mesNum)" 
+                                                            @click.stop
+                                                            v-focus 
+                                                            class="w-28 px-2 py-1 text-sm border-blue-500 rounded focus:ring-blue-500 focus:border-blue-500 text-right shadow-sm font-bold text-gray-900"
+                                                        >
                                                     </div>
-                                                    <div v-else class="font-semibold transition-colors flex justify-end items-center gap-1" :class="budgetStatus === 'Congelado' ? 'text-gray-500 cursor-not-allowed' : 'text-blue-600 cursor-pointer hover:bg-blue-100 px-2 py-1 rounded'" :title="budgetStatus === 'Congelado' ? 'Protegido' : 'Duplo clique para editar'">
+                                                    <div v-else class="font-semibold transition-colors flex justify-end items-center gap-1" :class="budgetStatus === 'Congelado' ? 'text-gray-500 cursor-not-allowed' : 'text-blue-600 cursor-pointer hover:bg-blue-100 px-2 py-1 rounded'" :title="budgetStatus === 'Congelado' ? 'Protegido' : 'Clique 1x para editar'">
                                                         <svg v-if="budgetStatus === 'Congelado'" class="w-3 h-3 text-green-600 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
                                                         {{ formatCurrency(item.valores ? item.valores[mesNum] : 0) }}
                                                     </div>
@@ -440,3 +553,14 @@ const undoAI = () => {
         </div>
     </ErpLayout>
 </template>
+
+<style>
+@media print {
+    .no-print, nav, header, aside, button { display: none !important; }
+    body { background-color: #ffffff !important; font-size: 10px !important; }
+    @page { size: landscape; margin: 1cm; }
+    .printable-area { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+    table { width: 100% !important; border-collapse: collapse !important; }
+    th, td { padding: 4px 6px !important; font-size: 10px !important; }
+}
+</style>
