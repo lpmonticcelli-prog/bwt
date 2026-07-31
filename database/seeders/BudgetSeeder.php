@@ -134,13 +134,13 @@ class BudgetSeeder extends Seeder
             ],
         ];
 
-        // Salva no banco (Agora com conversão blindada para JSON)
+        // Salva no banco (O Model do Laravel cuida do JSON automaticamente no MySQL)
         foreach ($items as $item) {
             $budget->items()->create([
                 'categoria' => $item['categoria'],
                 'nome' => $item['nome'],
-                'valores_mensais' => json_encode($item['valores']), 
-                'valores_originais' => json_encode($item['valores']),
+                'valores_mensais' => $item['valores'], 
+                'valores_originais' => $item['valores'],
             ]);
         }
     }
