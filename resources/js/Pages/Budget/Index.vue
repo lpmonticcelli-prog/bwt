@@ -18,6 +18,7 @@ const props = defineProps({
 const isUnlocked = ref(false);
 const inputSenha = ref('');
 const erroSenha = ref('');
+const isProcessing = ref(false);
 
 // A senha mestre de segurança da tela
 const SENHA_MESTRE = '1234'; 
@@ -40,11 +41,33 @@ onMounted(() => {
 });
 
 // ==========================================
-// 📄 EXPORTAÇÃO PARA PDF (OFICIAL)
+// 📄 EXPORTAÇÃO PARA PDF E NOVA LINHA
 // ==========================================
 const exportarPdf = (tipo) => {
-    // Redireciona para a rota do Laravel injetando o tipo (mensal ou trimestral)
     window.open(route('budget.exportar-pdf') + '?tipo=' + tipo, '_blank');
+};
+
+const adicionarLinha = (categoriaSelecionada) => {
+    if (props.budgetStatus === 'Congelado') return;
+    
+    const nomeNovaConta = prompt(`Digite o nome da nova conta para a categoria [${categoriaSelecionada}]:`);
+    
+    if (nomeNovaConta && nomeNovaConta.trim() !== '') {
+        isProcessing.value = true;
+        // Chama o backend para criar a linha e devolver a tela atualizada com o ID real
+        router.post(route('budget.item.store', props.budgetId), {
+            categoria: categoriaSelecionada,
+            nome: nomeNovaConta
+        }, {
+            preserveScroll: true,
+            onSuccess: () => {
+                categoriasExpandidas.value[categoriaSelecionada] = true;
+            },
+            onFinish: () => { 
+                isProcessing.value = false; 
+            }
+        });
+    }
 };
 
 // ==========================================
@@ -211,7 +234,6 @@ const getMargemAno = () => {
 // ==========================================
 const editingCell = ref(null);
 const editValueStr = ref("0,00");
-const isProcessing = ref(false);
 
 const startEditing = (item, mesNum, currentValue) => {
     if (props.budgetStatus === 'Congelado') return;
@@ -263,20 +285,6 @@ const unfreezeBudget = () => {
     if (confirm('⚠️ ALERTA DE SEGURANÇA: Tem certeza que deseja DESTRAVAR este Orçamento?')) {
         isProcessing.value = true;
         router.post(route('budget.descongelar', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
-    }
-};
-
-const runAI = () => {
-    if (confirm('✨ Deseja rodar o Motor Preditivo?')) {
-        isProcessing.value = true;
-        router.post(route('budget.predict', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
-    }
-};
-
-const undoAI = () => {
-    if (confirm('⏪ ALERTA: Deseja RESTAURAR o orçamento para o estado original?')) {
-        isProcessing.value = true;
-        router.post(route('budget.predict.undo', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
 </script>
@@ -339,7 +347,6 @@ const undoAI = () => {
                     
                     <div class="flex items-center gap-3 mt-4 md:mt-0 flex-wrap">
                         
-                        <!-- NOVOS BOTÕES DE EXPORTAÇÃO PDF -->
                         <div class="flex gap-2 mr-2">
                             <button @click="exportarPdf('trimestral')" title="Resumo por Trimestres"
                                 class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
@@ -353,18 +360,6 @@ const undoAI = () => {
                                 <span>PDF Mensal</span>
                             </button>
                         </div>
-
-                        <button v-if="budgetStatus !== 'Congelado'" @click="undoAI" :disabled="isProcessing" title="Restaurar Valores Originais"
-                            class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg shadow flex items-center gap-2 transition-all">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
-                            <span class="hidden md:inline">Restaurar</span>
-                        </button>
-
-                        <button v-if="budgetStatus !== 'Congelado'" @click="runAI" :disabled="isProcessing"
-                            class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg shadow flex items-center gap-2 transition-all">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                            {{ isProcessing ? 'Calculando...' : 'IA Preditiva' }}
-                        </button>
 
                         <button v-if="budgetStatus !== 'Congelado'" @click="freezeBudget" :disabled="isProcessing"
                             class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
@@ -449,7 +444,12 @@ const undoAI = () => {
                                 <template v-for="grupo in budgetCategories" :key="grupo.categoria">
                                     <tr class="bg-gray-200/60 border-b">
                                         <td class="px-4 py-3 font-bold text-gray-800 uppercase flex items-center justify-between sticky left-0 z-10 bg-gray-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] cursor-pointer hover:bg-gray-300" @click="toggleCategoria(grupo.categoria)">
-                                            <span>{{ grupo.categoria }}</span>
+                                            <div class="flex items-center gap-2">
+                                                <span>{{ grupo.categoria }}</span>
+                                                <button v-if="budgetStatus !== 'Congelado'" @click.stop="adicionarLinha(grupo.categoria)" title="Adicionar nova conta" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded shadow-sm no-print transition-colors">
+                                                    + Linha
+                                                </button>
+                                            </div>
                                             <span class="text-gray-500 text-lg no-print">{{ categoriasExpandidas[grupo.categoria] ? '▾' : '▸' }}</span>
                                         </td>
                                         

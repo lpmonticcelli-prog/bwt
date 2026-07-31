@@ -10,6 +10,13 @@ use Barryvdh\DomPDF\Facade\Pdf;
 
 class BudgetController extends Controller
 {
+    // Helper privado para evitar código repetido e garantir leitura segura do Array
+    private function getArrayValues($item, $column = 'valores_mensais')
+    {
+        if (!$item || empty($item->$column)) return [];
+        return is_string($item->$column) ? json_decode($item->$column, true) : $item->$column;
+    }
+
     // ==========================================
     // EXIBE A TELA E MONTA OS DADOS (DRE)
     // ==========================================
@@ -43,14 +50,10 @@ class BudgetController extends Controller
             $budgetData[] = [
                 'categoria' => $categoria,
                 'itens' => $itens->map(function ($item) {
-                    $valores = $item->valores_mensais;
-                    if (is_string($valores)) {
-                        $valores = json_decode($valores, true);
-                    }
                     return [
                         'id' => $item->id,
                         'nome' => trim($item->nome),
-                        'valores' => $valores ?? [],
+                        'valores' => $this->getArrayValues($item),
                     ];
                 })->values(),
             ];
@@ -67,11 +70,40 @@ class BudgetController extends Controller
     }
 
     // ==========================================
-    // EXPORTAÇÃO DE RELATÓRIO PDF (DUPLO FORMATO)
+    // ADICIONAR NOVA LINHA DINÂMICA
+    // ==========================================
+    public function addItem(Request $request, $id)
+    {
+        $budget = Budget::findOrFail($id);
+
+        if ($budget->status === 'Congelado') {
+            abort(403, 'Acesso Negado: Este orçamento está congelado.');
+        }
+
+        $request->validate([
+            'categoria' => 'required|string',
+            'nome' => 'required|string'
+        ]);
+
+        $mesesZerados = array_fill_keys(range(1, 12), 0);
+        
+        // Passa o Array direto (o $casts do Laravel cuida do JSON)
+        $budget->items()->create([
+            'categoria' => mb_strtoupper(trim($request->categoria), 'UTF-8'),
+            'nome' => trim($request->nome),
+            'valores_mensais' => $mesesZerados,
+            'valores_originais' => $mesesZerados,
+        ]);
+
+        return back()->with('success', 'Nova linha adicionada com sucesso!');
+    }
+
+    // ==========================================
+    // EXPORTAÇÃO DE RELATÓRIO PDF
     // ==========================================
     public function exportarPdf(Request $request)
     {
-        $tipo = $request->query('tipo', 'trimestral'); // Pega o tipo de PDF da URL (padrão é trimestral)
+        $tipo = $request->query('tipo', 'trimestral');
         
         $budget = Budget::with('items')->where('ativo', true)->where('versao', 'Oficial')->firstOrFail();
 
@@ -86,16 +118,14 @@ class BudgetController extends Controller
             $budgetData[] = [
                 'categoria' => $categoria,
                 'itens' => $itens->map(function ($item) {
-                    $valores = is_string($item->valores_mensais) ? json_decode($item->valores_mensais, true) : $item->valores_mensais;
                     return [
                         'nome' => trim($item->nome),
-                        'valores' => $valores ?? [],
+                        'valores' => $this->getArrayValues($item),
                     ];
                 })->values(),
             ];
         }
 
-        // Escolhe o template dependendo do que o usuário clicou no front-end
         $viewName = $tipo === 'mensal' ? 'pdf.budget_executivo_mensal' : 'pdf.budget_executivo';
         
         $pdf = Pdf::loadView($viewName, [
@@ -105,10 +135,7 @@ class BudgetController extends Controller
             'dataEmissao' => date('d/m/Y H:i'),
         ]);
 
-        // Define o papel como A4 Paisagem para caber todas as colunas
         $pdf->setPaper('a4', 'landscape');
-
-        // Formata o nome do arquivo que será baixado
         $fileName = $tipo === 'mensal' ? 'Budget_Mensal_' : 'Budget_Trimestral_';
         
         return $pdf->stream($fileName . $budget->ano . '_BWT.pdf');
@@ -130,18 +157,18 @@ class BudgetController extends Controller
             'valor' => 'required|numeric'
         ]);
         
-        $valores = is_string($item->valores_mensais) ? json_decode($item->valores_mensais, true) : ($item->valores_mensais ?? []);
+        $valores = $this->getArrayValues($item);
         $valores[$request->mes] = $request->valor;
         
-        $item->valores_mensais = json_encode($valores);
+        // Passa o Array direto (sem json_encode)
+        $item->valores_mensais = $valores;
         $item->save();
 
-        // MÁGICA: Se o usuário editou Vendas, recalcula os impostos na hora!
         if (in_array($item->nome, ['Solfácil Distribuidora', 'Empilhadeira', 'Total Vendas'])) {
             $this->recalcularImpostos($item->budget_id, $request->mes);
         }
 
-        return back()->with('success', 'Valor atualizado e impostos recalculados!');
+        return back()->with('success', 'Valor atualizado com sucesso!');
     }
 
     private function recalcularImpostos($budgetId, $mes)
@@ -152,44 +179,41 @@ class BudgetController extends Controller
         $empilhadeira = $items->where('nome', 'Empilhadeira')->first();
         $totalVendas = $items->where('nome', 'Total Vendas')->first();
         
-        $somaVendas = 0;
-        if ($solfacil || $empilhadeira) {
-            $valS = $solfacil ? (float)(is_string($solfacil->valores_mensais) ? json_decode($solfacil->valores_mensais, true)[$mes] ?? 0 : $solfacil->valores_mensais[$mes] ?? 0) : 0;
-            $valE = $empilhadeira ? (float)(is_string($empilhadeira->valores_mensais) ? json_decode($empilhadeira->valores_mensais, true)[$mes] ?? 0 : $empilhadeira->valores_mensais[$mes] ?? 0) : 0;
-            $somaVendas = $valS + $valE;
-            
-            if ($totalVendas && $somaVendas > 0) {
-                $vTV = is_string($totalVendas->valores_mensais) ? json_decode($totalVendas->valores_mensais, true) : $totalVendas->valores_mensais;
-                $vTV[$mes] = $somaVendas;
-                $totalVendas->valores_mensais = json_encode($vTV);
-                $totalVendas->save();
-            }
+        $valS = $solfacil ? (float)($this->getArrayValues($solfacil)[$mes] ?? 0) : 0;
+        $valE = $empilhadeira ? (float)($this->getArrayValues($empilhadeira)[$mes] ?? 0) : 0;
+        $somaVendas = $valS + $valE;
+
+        if ($totalVendas && $somaVendas > 0) {
+            $vTV = $this->getArrayValues($totalVendas);
+            $vTV[$mes] = $somaVendas;
+            $totalVendas->valores_mensais = $vTV;
+            $totalVendas->save();
         }
 
-        $baseCalculo = $totalVendas ? (float)(is_string($totalVendas->valores_mensais) ? json_decode($totalVendas->valores_mensais, true)[$mes] ?? 0 : $totalVendas->valores_mensais[$mes] ?? 0) : $somaVendas;
+        $baseCalculo = $totalVendas ? (float)($this->getArrayValues($totalVendas)[$mes] ?? 0) : $somaVendas;
 
-        // Regras Fiscais Oficiais BWT
+        // Regras Fiscais
         $taxas = [
             'PIS 0,65%' => 0.0065,
             'COFINS 3%' => 0.0300,
             'ICMS 10%'  => 0.1000,
-            'IRPJ'      => 0.0120, // 8% base x 15% alíquota IR
-            'CSLL'      => 0.0108  // 12% base x 9% alíquota CSLL
+            'IRPJ'      => 0.0120,
+            'CSLL'      => 0.0108 
         ];
 
         foreach ($taxas as $nomeImposto => $percentual) {
             $impostoItem = $items->where('nome', $nomeImposto)->first();
             if ($impostoItem) {
-                $vImp = is_string($impostoItem->valores_mensais) ? json_decode($impostoItem->valores_mensais, true) : $impostoItem->valores_mensais;
+                $vImp = $this->getArrayValues($impostoItem);
                 $vImp[$mes] = round($baseCalculo * $percentual, 2);
-                $impostoItem->valores_mensais = json_encode($vImp);
+                $impostoItem->valores_mensais = $vImp;
                 $impostoItem->save();
             }
         }
     }
 
     // ==========================================
-    // TRAVAS DE SEGURANÇA E AUDITORIA
+    // TRAVAS DE SEGURANÇA
     // ==========================================
     public function congelar($id)
     {
@@ -204,7 +228,7 @@ class BudgetController extends Controller
         $budget = Budget::findOrFail($id);
         $budget->status = 'Rascunho';
         $budget->save();
-        return back()->with('success', 'Orçamento DESTRAVADO! Cuidado ao realizar as edições.');
+        return back()->with('success', 'Orçamento DESTRAVADO!');
     }
 
     // ==========================================
@@ -219,7 +243,7 @@ class BudgetController extends Controller
         }
 
         foreach ($budget->items as $item) {
-            $valores = is_string($item->valores_mensais) ? json_decode($item->valores_mensais, true) : ($item->valores_mensais ?? []);
+            $valores = $this->getArrayValues($item);
             $mesesPreenchidos = []; $valoresPreenchidos = [];
 
             for ($m = 1; $m <= 12; $m++) {
@@ -260,7 +284,7 @@ class BudgetController extends Controller
                 }
             }
 
-            $item->valores_mensais = json_encode($valores);
+            $item->valores_mensais = $valores;
             $item->save();
         }
 
@@ -279,16 +303,13 @@ class BudgetController extends Controller
         }
 
         foreach ($budget->items as $item) {
-            // Verifica se existe o backup na coluna original
-            if (!empty($item->valores_originais)) {
-                $originais = is_string($item->valores_originais) ? json_decode($item->valores_originais, true) : $item->valores_originais;
-                
-                // Restaura sobrescrevendo e transformando de volta em JSON
-                $item->valores_mensais = json_encode($originais);
+            $originais = $this->getArrayValues($item, 'valores_originais');
+            if (!empty($originais)) {
+                $item->valores_mensais = $originais;
                 $item->save();
             }
         }
 
-        return back()->with('success', '⏪ Reset Concluído! O orçamento voltou exatamente como foi importado no início.');
+        return back()->with('success', '⏪ Reset Concluído! O orçamento voltou exatamente como foi importado.');
     }
 }
