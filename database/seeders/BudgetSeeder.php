@@ -11,7 +11,6 @@ class BudgetSeeder extends Seeder
 {
     public function run(): void
     {
-        // Limpeza segura contornando a trava de chaves estrangeiras
         Schema::disableForeignKeyConstraints();
         Budget::truncate();
         BudgetItem::truncate();
@@ -23,23 +22,18 @@ class BudgetSeeder extends Seeder
         $budget2025 = Budget::create([
             'ano' => 2025,
             'versao' => 'Oficial',
-            'status' => 'Congelado', // Impede edições acidentais no passado
-            'ativo' => false,        // Esconde da tela principal de operação
+            'status' => 'Congelado', 
+            'ativo' => false,        
         ]);
 
         $items2025 = [
-            // RECEITAS
             ['categoria' => 'RECEITAS', 'nome' => 'Solfácil Distribuidora', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>310000,"5"=>213285,"6"=>135267,"7"=>151016,"8"=>208420,"9"=>338457,"10"=>272506,"11"=>220302,"12"=>210132]],
             ['categoria' => 'RECEITAS', 'nome' => 'Empilhadeira', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>0,"5"=>0,"6"=>0,"7"=>1850,"8"=>0,"9"=>3500,"10"=>0,"11"=>0,"12"=>0]],
-            
-            // IMPOSTOS
             ['categoria' => 'IMPOSTOS', 'nome' => 'PIS 0,65%', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>0,"5"=>1386.35,"6"=>879.24,"7"=>602.16,"8"=>1354.73,"9"=>2222.72,"10"=>1771.29,"11"=>1431.96,"12"=>1365.86]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'COFINS 3%', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>9300,"5"=>6398.55,"6"=>4058.01,"7"=>2779.16,"8"=>6252.60,"9"=>10258.71,"10"=>8175.18,"11"=>6609.06,"12"=>6303.96]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'ICMS 10%', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>37200,"5"=>21328.5,"6"=>13526.7,"7"=>15101.6,"8"=>20842,"9"=>33845.7,"10"=>27250.6,"11"=>6609.06,"12"=>21013.2]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'IRPJ', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>3720,"5"=>2559.42,"6"=>1623.20,"7"=>1834.39,"8"=>2501.04,"9"=>4103.48,"10"=>3270.07,"11"=>2643.62,"12"=>2521.58]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'CSLL', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>3348,"5"=>2303.48,"6"=>1460.88,"7"=>1650.95,"8"=>2250.94,"9"=>3693.14,"10"=>2943.06,"11"=>2379.26,"12"=>2269.43]],
-
-            // CUSTO FIXO
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Telefone', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>85,"5"=>85,"6"=>85,"7"=>85,"8"=>85,"9"=>85,"10"=>170,"11"=>85,"12"=>85]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Cowork SJC', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>259,"5"=>259,"6"=>259,"7"=>259,"8"=>259,"9"=>259,"10"=>259,"11"=>259,"12"=>259]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Cartão de Crédito', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>0,"5"=>139,"6"=>139,"7"=>139,"8"=>139,"9"=>139,"10"=>472.17,"11"=>493.26,"12"=>686.9]],
@@ -49,8 +43,6 @@ class BudgetSeeder extends Seeder
             ['categoria' => 'CUSTO FIXO', 'nome' => 'INSS Pró-Labore', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>0,"5"=>0,"6"=>0,"7"=>0,"8"=>0,"9"=>0,"10"=>517.44,"11"=>517.44,"12"=>470.58]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Vale Refeição (MEI)', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>600,"5"=>600,"6"=>600,"7"=>600,"8"=>600,"9"=>600,"10"=>600,"11"=>600,"12"=>600]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Maria Clara (MEI)', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>4000,"5"=>4000,"6"=>4000,"7"=>4000,"8"=>4000,"9"=>4000,"10"=>4000,"11"=>4000,"12"=>4000]],
-
-            // CUSTO VARIÁVEL
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Seguro de Carga (Tokio/Sompo)', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>3000,"5"=>2147.6,"6"=>2147.6,"7"=>2147,"8"=>2147.6,"9"=>2147.6,"10"=>2148.22,"11"=>2461.8,"12"=>2147.6]],
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Fechamento E4LOG', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>195300,"5"=>134369.55,"6"=>86570.88,"7"=>97834.24,"8"=>126580.52,"9"=>218852.48,"10"=>212732.72,"11"=>221527.96,"12"=>131789.18]],
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Comissão Maurício', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>9300,"5"=>6398.55,"6"=>4058.01,"7"=>4585.98,"8"=>4530.48,"9"=>10258.71,"10"=>8175.18,"11"=>6609.06,"12"=>6303.96]],
@@ -64,8 +56,8 @@ class BudgetSeeder extends Seeder
             $budget2025->items()->create([
                 'categoria' => mb_strtoupper($item['categoria'], 'UTF-8'),
                 'nome' => $item['nome'],
-                'valores_mensais' => $item['valores'], 
-                'valores_originais' => $item['valores'],
+                'valores_mensais' => json_encode($item['valores']), 
+                'valores_originais' => json_encode($item['valores']),
             ]);
         }
 
@@ -75,23 +67,18 @@ class BudgetSeeder extends Seeder
         $budget2026 = Budget::create([
             'ano' => 2026,
             'versao' => 'Oficial',
-            'status' => 'Rascunho', // Aberto para edições
-            'ativo' => true,        // É o orçamento que aparecerá na tela do ERP
+            'status' => 'Rascunho', 
+            'ativo' => true,        
         ]);
 
         $items2026 = [
-            // RECEITAS
             ['categoria' => 'RECEITAS', 'nome' => 'Solfácil Distribuidora', 'valores' => ["1"=>242293,"2"=>294707,"3"=>429290,"4"=>399308,"5"=>363877,"6"=>298704,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'RECEITAS', 'nome' => 'Empilhadeira', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>0,"5"=>0,"6"=>0,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
-
-            // IMPOSTOS
             ['categoria' => 'IMPOSTOS', 'nome' => 'PIS 0,65%', 'valores' => ["1"=>1574.90,"2"=>1915.60,"3"=>2757.89,"4"=>2595.50,"5"=>2365.20,"6"=>1941.58,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'COFINS 3%', 'valores' => ["1"=>7268.79,"2"=>8841.21,"3"=>12728.7,"4"=>11979.24,"5"=>10916.31,"6"=>8961.12,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'ICMS 10%', 'valores' => ["1"=>24229.3,"2"=>29470.7,"3"=>42929.0,"4"=>39930.8,"5"=>36387.7,"6"=>29870.4,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'IRPJ', 'valores' => ["1"=>2907.52,"2"=>3536.48,"3"=>5091.48,"4"=>4791.70,"5"=>4366.52,"6"=>3584.45,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'IMPOSTOS', 'nome' => 'CSLL', 'valores' => ["1"=>2616.76,"2"=>3182.84,"3"=>4582.33,"4"=>4312.53,"5"=>3929.87,"6"=>3226.00,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
-
-            // CUSTO FIXO
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Telefone', 'valores' => ["1"=>85,"2"=>85,"3"=>85,"4"=>85,"5"=>85,"6"=>85,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Cowork SJC', 'valores' => ["1"=>259.0,"2"=>259.0,"3"=>259.0,"4"=>264.35,"5"=>269.0,"6"=>269.0,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Cartão de Crédito', 'valores' => ["1"=>704.23,"2"=>1057.0,"3"=>220.73,"4"=>544.05,"5"=>401.0,"6"=>325.0,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
@@ -101,8 +88,6 @@ class BudgetSeeder extends Seeder
             ['categoria' => 'CUSTO FIXO', 'nome' => 'INSS Pró-Labore', 'valores' => ["1"=>470.58,"2"=>502.51,"3"=>502.51,"4"=>502.51,"5"=>502.51,"6"=>502.51,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Vale Refeição (MEI)', 'valores' => ["1"=>600,"2"=>600,"3"=>600,"4"=>600,"5"=>600,"6"=>600,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO FIXO', 'nome' => 'Maria Clara (MEI)', 'valores' => ["1"=>4000,"2"=>4000,"3"=>4000,"4"=>4000,"5"=>4000,"6"=>4000,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
-
-            // CUSTO VARIÁVEL
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Seguro de Carga (Tokio/Sompo)', 'valores' => ["1"=>2147.6,"2"=>2149.38,"3"=>2151.52,"4"=>2151.52,"5"=>2428.76,"6"=>2927.06,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Fechamento E4LOG', 'valores' => ["1"=>133022.36,"2"=>90765.24,"3"=>179980.51,"4"=>214326.22,"5"=>260740.7,"6"=>233521.0,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
             ['categoria' => 'CUSTO VARIÁVEL', 'nome' => 'Custo de Coleta', 'valores' => ["1"=>0,"2"=>0,"3"=>0,"4"=>16000,"5"=>16000,"6"=>16000,"7"=>0,"8"=>0,"9"=>0,"10"=>0,"11"=>0,"12"=>0]],
@@ -117,8 +102,8 @@ class BudgetSeeder extends Seeder
             $budget2026->items()->create([
                 'categoria' => mb_strtoupper($item['categoria'], 'UTF-8'),
                 'nome' => $item['nome'],
-                'valores_mensais' => $item['valores'], 
-                'valores_originais' => $item['valores'],
+                'valores_mensais' => json_encode($item['valores']), 
+                'valores_originais' => json_encode($item['valores']),
             ]);
         }
     }

@@ -17,7 +17,7 @@ class BsoftSyncService
     private string $baseUrl = 'https://api.bsoft.com.br/sistema/v2';
     private ?string $token = null;
     
-    // O CNPJ oficial da BWT Logística (Sem pontuação)
+    // O CNPJ oficial da BWT Logística
     private string $cnpjBWT = '55008868000120';
     
     private array $credenciais = [
@@ -29,8 +29,7 @@ class BsoftSyncService
 
     public function __construct()
     {
-        set_time_limit(0); 
-        ini_set('memory_limit', '512M');
+        // Removido o limite de tempo do construtor para evitar falhas no boot do Laravel
         $this->login();
     }
 
@@ -82,10 +81,28 @@ class BsoftSyncService
     }
 
     // =========================================================================
+    // HELPER MÁGICO: Evita o erro de "Array to string conversion" do XML
+    // =========================================================================
+    private function safeString($val): string 
+    {
+        if (is_array($val)) {
+            if (empty($val)) return '';
+            return implode(' ', array_filter(array_map(function($v) {
+                return is_scalar($v) ? (string)$v : '';
+            }, $val)));
+        }
+        return trim((string)$val);
+    }
+
+    // =========================================================================
     // ETAPA 1: O "DESPACHANTE" - Apenas puxa os IDs e joga na Fila
     // =========================================================================
     public function sincronizarNotasRecentes(): array 
     {
+        // Proteções contra queda do navegador adicionadas apenas no momento do clique
+        @set_time_limit(120); 
+        @ini_set('memory_limit', '512M');
+
         Log::info("==================================================");
         Log::info("🚀 [DESPACHANTE] INICIANDO BUSCA DE NOTAS BSOFT");
 
@@ -104,15 +121,15 @@ class BsoftSyncService
         }
 
         $offset = 0;
-        $quantidade = 500; 
+        $quantidade = 100; // REDUZIDO para não estourar o servidor
         $paginasBaixadas = 0;
         $totalEnviadoFila = 0;
+        $inicioRotina = time();
 
         try {
             do {
                 Log::info("📡 Buscando lote de notas na Bsoft (Offset: $offset)...");
                 
-                // As barras das datas são convertidas magicamente pela chamada em array do HTTP
                 $response = Http::withoutVerifying()
                     ->withToken($this->token)
                     ->acceptJson()
@@ -136,24 +153,30 @@ class BsoftSyncService
                 if (!empty($loteAtual)) {
                     ProcessBsoftLoteJob::dispatch($loteAtual);
                     $totalEnviadoFila += $qtdLote;
-                    Log::info("📦 Lote de $qtdLote notas despachado para a Fila de Processamento.");
+                    Log::info("📦 Lote de $qtdLote notas despachado para processamento.");
                 }
 
                 $offset += $quantidade;
                 $paginasBaixadas++;
 
-                if ($paginasBaixadas >= 200) {
-                    Log::warning("⚠️ Limite de 100.000 notas atingido!");
-                    break;
+                // TRAVA DE SEGURANÇA CONTRA ERRO 500: Se passar de 45 segundos, para e avisa o usuário.
+                if (env('QUEUE_CONNECTION', 'sync') === 'sync' && (time() - $inicioRotina > 45)) {
+                    Log::warning("⚠️ Tempo limite da Web atingido. Salvando parciais e interrompendo paginação.");
+                    return [
+                        'success' => true,
+                        'message' => "🚀 Sucesso Parcial!\n\nProcessamos $totalEnviadoFila notas agora.\n\nPara não travar o seu sistema, fizemos uma pausa. Clique em SINCRONIZAR novamente para puxar as notas restantes!"
+                    ];
                 }
+
+                if ($paginasBaixadas >= 500) break; // Limite de emergência
 
             } while ($qtdLote == $quantidade); 
 
-            Log::info("🚀 [DESPACHANTE] FINALIZADO! Total enviado para a fila: $totalEnviadoFila");
+            Log::info("🚀 [DESPACHANTE] FINALIZADO! Total enviado: $totalEnviadoFila");
 
             return [
                 'success' => true, 
-                'message' => "🚀 Sucesso!\n\nForam encontradas $totalEnviadoFila notas.\nElas foram enviadas para o motor de processamento invisível e estarão no sistema em alguns minutos!"
+                'message' => "🚀 Sincronização Concluída!\n\nForam baixadas $totalEnviadoFila notas.\nTodas as páginas do período foram lidas com sucesso!"
             ];
 
         } catch (\Throwable $e) {
@@ -162,7 +185,7 @@ class BsoftSyncService
     }
 
     // =========================================================================
-    // ETAPA 2: O "TRABALHADOR" - Roda no Background (Lê o XML e salva no Banco)
+    // ETAPA 2: O "TRABALHADOR" - Lê o XML e salva no Banco
     // =========================================================================
     public function processarLoteDeNotas(array $lote): void
     {
@@ -203,18 +226,12 @@ class BsoftSyncService
             $xmlObj = @simplexml_load_string($xmlLimpo);
             $data = $xmlObj ? json_decode(json_encode($xmlObj), true) : [];
             
-            // 🛑 O NOVO FILTRO TITÃ: Verifica de quem é a nota
             $cnpjContratante = $this->extractCnpjPagador($data);
             
             if ($cnpjContratante !== $this->cnpjBWT) {
-                // A nota não é da BWT. O robô simplesmente pula para a próxima!
                 $ignoradas++;
                 continue;
             }
-            
-            // ==========================================================
-            // DAQUI PARA BAIXO, TEMOS CERTEZA DE QUE É UMA NOTA DA BWT
-            // ==========================================================
             
             $cidadeDestino = $this->extractCity($data) ?: 'DESCONHECIDA';
             $dataEmissao = $this->extractDataEmissao($data) ?? Carbon::now('America/Sao_Paulo')->format('Y-m-d');
@@ -231,7 +248,6 @@ class BsoftSyncService
 
             $freteExistente = Faturamento::where($criterioBusca)->first();
 
-            // Atualização de frete existente
             if ($freteExistente) {
                 $freteExistente->e4log_faturado = true;
                 $freteExistente->custo_e4log = $valorTotal;
@@ -247,7 +263,6 @@ class BsoftSyncService
                 continue; 
             }
 
-            // Cálculo para novo frete BWT
             $city = City::where('name', $cidadeDestino)->with('regions.pricingRules')->first();
             $receitaFreteBase = 0; 
             $receitaTde = 0; 
@@ -297,11 +312,11 @@ class BsoftSyncService
             $processadas++;
         }
 
-        Log::info("✅ [WORKER FINALIZADO] Lote: Novas $processadas | Atuais $atualizadas | Ignoradas (Outros Clientes): $ignoradas");
+        Log::info("✅ [WORKER FINALIZADO] Lote: Novas $processadas | Atuais $atualizadas | Ignoradas: $ignoradas");
     }
 
     // =========================================================================
-    // MÉTODOS AUXILIARES DE EXTRAÇÃO XML
+    // MÉTODOS AUXILIARES BLINDADOS PELO "safeString"
     // =========================================================================
 
     private function getBaseNode(array $data): ?array 
@@ -311,23 +326,15 @@ class BsoftSyncService
         return null; 
     }
 
-    /**
-     * Extrai o CNPJ de quem expediu ou remeteu a carga para identificar o dono da nota
-     */
     private function extractCnpjPagador(array $data): ?string 
     { 
         $base = $this->getBaseNode($data); 
-        
-        // Prioriza o Expedidor (no caso da BWT, ela costuma ser a expedidora)
         if ($base && isset($base['exped']['CNPJ'])) {
-            return (string) $base['exped']['CNPJ'];
+            return $this->safeString($base['exped']['CNPJ']);
         } 
-        
-        // Fallback para o Remetente se não houver expedidor
         if ($base && isset($base['rem']['CNPJ'])) {
-            return (string) $base['rem']['CNPJ'];
+            return $this->safeString($base['rem']['CNPJ']);
         }
-        
         return null; 
     }
 
@@ -335,7 +342,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['dest']['enderDest']['xMun'])) {
-            return strtoupper(Str::slug((string) $base['dest']['enderDest']['xMun'], ' '));
+            return strtoupper(Str::slug($this->safeString($base['dest']['enderDest']['xMun']), ' '));
         } 
         return null; 
     }
@@ -344,7 +351,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['infCTeNorm']['infCarga']['vCarga'])) {
-            return (float) $base['infCTeNorm']['infCarga']['vCarga'];
+            return (float) $this->safeString($base['infCTeNorm']['infCarga']['vCarga']);
         } 
         return 0.00; 
     }
@@ -353,7 +360,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['compl']['xObs'])) {
-            return (string) $base['compl']['xObs'];
+            return $this->safeString($base['compl']['xObs']);
         } 
         return ''; 
     }
@@ -362,7 +369,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['ide']['tpCTe'])) {
-            return (string) $base['ide']['tpCTe'];
+            return $this->safeString($base['ide']['tpCTe']);
         } 
         return '0'; 
     }
@@ -374,10 +381,10 @@ class BsoftSyncService
             $nfe = $base['infCTeNorm']['infDoc']['infNFe']; 
             
             if (isset($nfe['chave'])) {
-                return (string) $nfe['chave'];
+                return $this->safeString($nfe['chave']);
             } 
             if (is_array($nfe) && isset($nfe[0]['chave'])) {
-                return (string) $nfe[0]['chave'];
+                return $this->safeString($nfe[0]['chave']);
             } 
         } 
         return 'N/A'; 
@@ -387,12 +394,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['infCTeNorm']['infCarga']['proPred'])) { 
-            $prod = $base['infCTeNorm']['infCarga']['proPred']; 
-            
-            if (is_array($prod)) {
-                return implode(" ", $prod);
-            } 
-            return (string) $prod; 
+            return $this->safeString($base['infCTeNorm']['infCarga']['proPred']);
         } 
         return 'N/A'; 
     }
@@ -401,7 +403,7 @@ class BsoftSyncService
     { 
         $base = $this->getBaseNode($data); 
         if ($base && isset($base['ide']['dhEmi'])) {
-            return substr((string) $base['ide']['dhEmi'], 0, 10);
+            return substr($this->safeString($base['ide']['dhEmi']), 0, 10);
         } 
         return null; 
     }
@@ -417,7 +419,6 @@ class BsoftSyncService
         if ($tipoCTe == '1') {
             return 'Complemento';
         } 
-        
         return 'Entrega'; 
     }
 }

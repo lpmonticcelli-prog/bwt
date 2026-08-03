@@ -10,7 +10,7 @@ use Barryvdh\DomPDF\Facade\Pdf;
 
 class BudgetController extends Controller
 {
-    // Helper privado para evitar código repetido e garantir leitura segura do Array
+    // Helper privado para evitar código repetido e garantir leitura segura do Array/JSON
     private function getArrayValues($item, $column = 'valores_mensais')
     {
         if (!$item || empty($item->$column)) return [];
@@ -22,11 +22,12 @@ class BudgetController extends Controller
     // ==========================================
     public function index()
     {
-        $budget = Budget::with('items')->where('ativo', true)->where('versao', 'Oficial')->first();
+        // CORREÇÃO: Busca o orçamento do ano atual para garantir que os dados importados do Excel apareçam na tela
+        $budget = Budget::with('items')->where('ano', date('Y'))->first();
 
         if (!$budget) {
             return Inertia::render('Budget/Index', [
-                'error' => 'Nenhum orçamento ativo encontrado.',
+                'error' => 'Nenhum orçamento ativo encontrado para este ano.',
                 'budgetId' => null,
                 'budgetAno' => date('Y'),
                 'budgetVersao' => '-',
@@ -72,7 +73,7 @@ class BudgetController extends Controller
     // ==========================================
     // ADICIONAR NOVA LINHA DINÂMICA
     // ==========================================
-    public function addItem(Request $request, $id)
+    public function storeItem(Request $request, $id)
     {
         $budget = Budget::findOrFail($id);
 
@@ -87,12 +88,12 @@ class BudgetController extends Controller
 
         $mesesZerados = array_fill_keys(range(1, 12), 0);
         
-        // Passa o Array direto (o $casts do Laravel cuida do JSON)
+        // CORREÇÃO: json_encode para o MySQL aceitar o Array nativamente
         $budget->items()->create([
             'categoria' => mb_strtoupper(trim($request->categoria), 'UTF-8'),
             'nome' => trim($request->nome),
-            'valores_mensais' => $mesesZerados,
-            'valores_originais' => $mesesZerados,
+            'valores_mensais' => json_encode($mesesZerados),
+            'valores_originais' => json_encode($mesesZerados),
         ]);
 
         return back()->with('success', 'Nova linha adicionada com sucesso!');
@@ -105,7 +106,8 @@ class BudgetController extends Controller
     {
         $tipo = $request->query('tipo', 'trimestral');
         
-        $budget = Budget::with('items')->where('ativo', true)->where('versao', 'Oficial')->firstOrFail();
+        // CORREÇÃO: Mesma regra de busca para garantir que o PDF seja gerado com os dados do Excel
+        $budget = Budget::with('items')->where('ano', date('Y'))->firstOrFail();
 
         $categoriasGrouped = $budget->items->groupBy(function ($item) {
             $categoria = trim($item->categoria ?? '');
@@ -160,10 +162,11 @@ class BudgetController extends Controller
         $valores = $this->getArrayValues($item);
         $valores[$request->mes] = $request->valor;
         
-        // Passa o Array direto (sem json_encode)
-        $item->valores_mensais = $valores;
+        // CORREÇÃO: json_encode para garantir compatibilidade do MySQL
+        $item->valores_mensais = json_encode($valores);
         $item->save();
 
+        // Se for receita, aciona a engine de impostos
         if (in_array($item->nome, ['Solfácil Distribuidora', 'Empilhadeira', 'Total Vendas'])) {
             $this->recalcularImpostos($item->budget_id, $request->mes);
         }
@@ -186,7 +189,7 @@ class BudgetController extends Controller
         if ($totalVendas && $somaVendas > 0) {
             $vTV = $this->getArrayValues($totalVendas);
             $vTV[$mes] = $somaVendas;
-            $totalVendas->valores_mensais = $vTV;
+            $totalVendas->valores_mensais = json_encode($vTV);
             $totalVendas->save();
         }
 
@@ -206,7 +209,7 @@ class BudgetController extends Controller
             if ($impostoItem) {
                 $vImp = $this->getArrayValues($impostoItem);
                 $vImp[$mes] = round($baseCalculo * $percentual, 2);
-                $impostoItem->valores_mensais = $vImp;
+                $impostoItem->valores_mensais = json_encode($vImp);
                 $impostoItem->save();
             }
         }
@@ -229,87 +232,5 @@ class BudgetController extends Controller
         $budget->status = 'Rascunho';
         $budget->save();
         return back()->with('success', 'Orçamento DESTRAVADO!');
-    }
-
-    // ==========================================
-    // MOTOR PREDITIVO ESTATÍSTICO (IA)
-    // ==========================================
-    public function runPredictiveEngine($id)
-    {
-        $budget = Budget::with('items')->findOrFail($id);
-
-        if ($budget->status === 'Congelado') {
-            abort(403, 'Acesso Negado: Descongele o orçamento para rodar as previsões.');
-        }
-
-        foreach ($budget->items as $item) {
-            $valores = $this->getArrayValues($item);
-            $mesesPreenchidos = []; $valoresPreenchidos = [];
-
-            for ($m = 1; $m <= 12; $m++) {
-                if (isset($valores[$m]) && (float)$valores[$m] > 0) {
-                    $mesesPreenchidos[] = $m;
-                    $valoresPreenchidos[] = (float)$valores[$m];
-                }
-            }
-
-            $count = count($mesesPreenchidos);
-
-            if ($count >= 2) {
-                $sumX = array_sum($mesesPreenchidos);
-                $sumY = array_sum($valoresPreenchidos);
-                $sumXX = 0; $sumXY = 0;
-
-                foreach ($mesesPreenchidos as $k => $x) {
-                    $sumXX += $x * $x;
-                    $sumXY += $x * $valoresPreenchidos[$k];
-                }
-
-                $denominator = (($count * $sumXX) - ($sumX * $sumX));
-                $m = $denominator != 0 ? (($count * $sumXY) - ($sumX * $sumY)) / $denominator : 0;
-                $b = ($sumY - ($m * $sumX)) / $count;
-
-                for ($month = 1; $month <= 12; $month++) {
-                    if (!isset($valores[$month]) || (float)$valores[$month] == 0) {
-                        $predicted = ($m * $month) + $b;
-                        $valores[$month] = round(max(0, $predicted), 2);
-                    }
-                }
-            } elseif ($count === 1) {
-                $val = $valoresPreenchidos[0];
-                for ($month = 1; $month <= 12; $month++) {
-                    if (!isset($valores[$month]) || (float)$valores[$month] == 0) {
-                        $valores[$month] = $val;
-                    }
-                }
-            }
-
-            $item->valores_mensais = $valores;
-            $item->save();
-        }
-
-        return back()->with('success', '✨ Motor Preditivo Executado! Projeções geradas com sucesso.');
-    }
-
-    // ==========================================
-    // RESTAURAR: VOLTA PARA O EXCEL ORIGINAL
-    // ==========================================
-    public function undoPredictiveEngine($id)
-    {
-        $budget = Budget::with('items')->findOrFail($id);
-
-        if ($budget->status === 'Congelado') {
-            return back()->withErrors(['error' => 'Não é possível restaurar um orçamento congelado.']);
-        }
-
-        foreach ($budget->items as $item) {
-            $originais = $this->getArrayValues($item, 'valores_originais');
-            if (!empty($originais)) {
-                $item->valores_mensais = $originais;
-                $item->save();
-            }
-        }
-
-        return back()->with('success', '⏪ Reset Concluído! O orçamento voltou exatamente como foi importado.');
     }
 }

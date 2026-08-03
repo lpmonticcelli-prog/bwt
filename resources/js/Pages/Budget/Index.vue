@@ -20,7 +20,6 @@ const inputSenha = ref('');
 const erroSenha = ref('');
 const isProcessing = ref(false);
 
-// A senha mestre de segurança da tela
 const SENHA_MESTRE = '1234'; 
 
 const desbloquearPagina = () => {
@@ -29,7 +28,7 @@ const desbloquearPagina = () => {
         erroSenha.value = '';
         sessionStorage.setItem('budget_unlocked', 'true');
     } else {
-        erroSenha.value = 'Senha incorreta! Verifique a senha e tente novamente.';
+        erroSenha.value = 'Senha incorreta!';
         inputSenha.value = '';
     }
 };
@@ -40,9 +39,6 @@ onMounted(() => {
     }
 });
 
-// ==========================================
-// 📄 EXPORTAÇÃO PARA PDF E NOVA LINHA
-// ==========================================
 const exportarPdf = (tipo) => {
     window.open(route('budget.exportar-pdf') + '?tipo=' + tipo, '_blank');
 };
@@ -54,7 +50,6 @@ const adicionarLinha = (categoriaSelecionada) => {
     
     if (nomeNovaConta && nomeNovaConta.trim() !== '') {
         isProcessing.value = true;
-        // Chama o backend para criar a linha e devolver a tela atualizada com o ID real
         router.post(route('budget.item.store', props.budgetId), {
             categoria: categoriaSelecionada,
             nome: nomeNovaConta
@@ -70,9 +65,6 @@ const adicionarLinha = (categoriaSelecionada) => {
     }
 };
 
-// ==========================================
-// DIRETIVA DE AUTO-FOCUS E AUTO-SELECT
-// ==========================================
 const vFocus = {
     mounted: (el) => {
         el.focus();
@@ -80,9 +72,6 @@ const vFocus = {
     }
 };
 
-// ==========================================
-// CONTROLE DE EXPANSÃO (LINHAS E COLUNAS)
-// ==========================================
 const categoriasExpandidas = ref({});
 
 const initCategorias = () => {
@@ -125,9 +114,6 @@ const toggleTrimestre = (id) => {
     if (!isCurrentlyOpen) trimestresExpandidos.value[id] = true;
 };
 
-// ==========================================
-// FORMATADORES
-// ==========================================
 const formatCurrency = (value) => {
     if (!value || value === 0) return '-';
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -139,8 +125,26 @@ const formatPercent = (value) => {
 };
 
 // ==========================================
-// CÁLCULOS DAS LINHAS (CATEGORIAS E ITENS)
+// CÁLCULOS BLINDADOS CONTRA ACENTOS (NOVO!)
 // ==========================================
+const normalizeString = (str) => {
+    return (str || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+};
+
+const matchCategorias = (keywords) => {
+    return (props.budgetCategories || []).filter(c => {
+        const catName = normalizeString(c.categoria);
+        return keywords.some(k => catName.includes(k));
+    });
+};
+
+const calcTotal = (categoriasArr, mesNum) => {
+    return categoriasArr.reduce((acc, cat) => {
+        const items = cat.itens || [];
+        return acc + items.reduce((sum, item) => sum + (item.valores ? (parseFloat(item.valores[mesNum]) || 0) : 0), 0);
+    }, 0);
+};
+
 const getCategoriaTotal = (categoriaNome, mesNum) => {
     const categoria = (props.budgetCategories || []).find(c => c.categoria === categoriaNome);
     if (!categoria || !categoria.itens) return 0;
@@ -165,23 +169,6 @@ const getItemTotalTrimestre = (item, trimId) => {
 
 const getItemTotalAno = (item) => trimestres.reduce((acc, trim) => acc + getItemTotalTrimestre(item, trim.id), 0);
 
-// ==========================================
-// MOTOR DE BUSCA INTELIGENTE E TOTAIS GLOBAIS
-// ==========================================
-const matchCategorias = (keywords) => {
-    return (props.budgetCategories || []).filter(c => {
-        const catName = (c.categoria || '').toLowerCase();
-        return keywords.some(k => catName.includes(k));
-    });
-};
-
-const calcTotal = (categoriasArr, mesNum) => {
-    return categoriasArr.reduce((acc, cat) => {
-        const items = cat.itens || [];
-        return acc + items.reduce((sum, item) => sum + (item.valores ? (parseFloat(item.valores[mesNum]) || 0) : 0), 0);
-    }, 0);
-};
-
 const calcTotalTrimestre = (categoriasArr, trimId) => {
     const trim = trimestres.find(t => t.id === trimId);
     if (!trim) return 0;
@@ -190,20 +177,20 @@ const calcTotalTrimestre = (categoriasArr, trimId) => {
 
 const calcTotalAno = (categoriasArr) => trimestres.reduce((acc, trim) => acc + calcTotalTrimestre(categoriasArr, trim.id), 0);
 
-const getReceitaBruta = (mesNum) => calcTotal(matchCategorias(['venda', 'receita', 'faturamento']), mesNum);
-const getReceitaBrutaTrim = (trimId) => calcTotalTrimestre(matchCategorias(['venda', 'receita', 'faturamento']), trimId);
-const getReceitaBrutaAno = () => calcTotalAno(matchCategorias(['venda', 'receita', 'faturamento']));
+const getReceitaBruta = (mesNum) => calcTotal(matchCategorias(['venda', 'receita', 'faturamento', 'entrada']), mesNum);
+const getReceitaBrutaTrim = (trimId) => calcTotalTrimestre(matchCategorias(['venda', 'receita', 'faturamento', 'entrada']), trimId);
+const getReceitaBrutaAno = () => calcTotalAno(matchCategorias(['venda', 'receita', 'faturamento', 'entrada']));
 
-const getImpostos = (mesNum) => calcTotal(matchCategorias(['imposto', 'tributo']), mesNum);
-const getImpostosTrim = (trimId) => calcTotalTrimestre(matchCategorias(['imposto', 'tributo']), trimId);
-const getImpostosAno = () => calcTotalAno(matchCategorias(['imposto', 'tributo']));
+const getImpostos = (mesNum) => calcTotal(matchCategorias(['imposto', 'tributo', 'taxa', 'deducao', 'simples']), mesNum);
+const getImpostosTrim = (trimId) => calcTotalTrimestre(matchCategorias(['imposto', 'tributo', 'taxa', 'deducao', 'simples']), trimId);
+const getImpostosAno = () => calcTotalAno(matchCategorias(['imposto', 'tributo', 'taxa', 'deducao', 'simples']));
 
 const getReceitaLiquida = (mesNum) => getReceitaBruta(mesNum) - getImpostos(mesNum);
 const getReceitaLiquidaTrim = (trimId) => getReceitaBrutaTrim(trimId) - getImpostosTrim(trimId);
 const getReceitaLiquidaAno = () => getReceitaBrutaAno() - getImpostosAno();
 
 const getCostCategories = () => {
-    const excludedCats = matchCategorias(['venda', 'receita', 'faturamento', 'imposto', 'tributo']);
+    const excludedCats = matchCategorias(['venda', 'receita', 'faturamento', 'entrada', 'imposto', 'tributo', 'taxa', 'deducao', 'simples']);
     const excludedNames = excludedCats.map(c => c.categoria);
     return (props.budgetCategories || []).filter(c => !excludedNames.includes(c.categoria));
 };
@@ -230,11 +217,12 @@ const getMargemAno = () => {
 };
 
 // ==========================================
-// EDIÇÃO FINANCEIRA (MÁSCARA AO VIVO 1 CLIQUE)
+// EDIÇÃO FINANCEIRA E SOMA (+)
 // ==========================================
 const editingCell = ref(null);
 const editValueStr = ref("0,00");
 
+// 1. Função original: Substitui o valor todo
 const startEditing = (item, mesNum, currentValue) => {
     if (props.budgetStatus === 'Congelado') return;
     if (editingCell.value?.id === item.id && editingCell.value?.mes === mesNum) return;
@@ -246,6 +234,34 @@ const startEditing = (item, mesNum, currentValue) => {
     formatted = formatted.replace(/(\d)(?=(\d{3})+(?!\d))/g, "$1.");
     
     editValueStr.value = formatted;
+};
+
+// 2. NOVA FUNÇÃO: Soma o valor
+const addValorSomado = (item, mesNum) => {
+    if (props.budgetStatus === 'Congelado') return;
+    
+    const currentValue = item.valores && item.valores[mesNum] ? parseFloat(item.valores[mesNum]) : 0;
+    const currentFormatted = formatCurrency(currentValue);
+    
+    const input = prompt(`\nSOMA DE GASTOS NA CONTA: [${item.nome}]\n\nJá existe ${currentFormatted} lançado neste mês.\n\nDigite o valor ADICIONAL que deseja SOMAR a isso:`);
+    
+    if (input && input.trim() !== '') {
+        let cleanInput = input.trim();
+        // Se a pessoa digitar 1.500,50 ou 1500,50, converte pra padrão americano antes de somar
+        if (cleanInput.includes(',')) {
+            cleanInput = cleanInput.replace(/\./g, '').replace(',', '.');
+        }
+        
+        let numericInput = parseFloat(cleanInput);
+        
+        if (!isNaN(numericInput) && numericInput !== 0) {
+            const newValue = currentValue + numericInput;
+            
+            router.put(route('budget.item.update', item.id), { mes: mesNum, valor: newValue }, {
+                preserveScroll: true
+            });
+        }
+    }
 };
 
 const handleInput = (event) => {
@@ -271,9 +287,6 @@ const saveEdit = (item, mesNum) => {
     }
 };
 
-// ==========================================
-// AÇÕES DOS BOTÕES EXTRAS
-// ==========================================
 const freezeBudget = () => {
     if (confirm('🔒 ATENÇÃO DIRETORIA: Tem certeza que deseja CONGELAR este Orçamento?')) {
         isProcessing.value = true;
@@ -294,13 +307,10 @@ const unfreezeBudget = () => {
 
     <ErpLayout>
         
-        <!-- 🔒 OVERLAY DE BLOQUEIO POR SENHA -->
         <div v-if="!isUnlocked" class="min-h-[80vh] flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
             <div class="max-w-md w-full space-y-8 bg-white p-8 rounded-2xl shadow-xl border border-gray-200 text-center">
                 <div class="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center text-red-600">
-                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                    </svg>
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
                 </div>
                 <div>
                     <h2 class="text-2xl font-black text-gray-900 tracking-tight">Área Restrita: Budget Financeiro</h2>
@@ -309,21 +319,10 @@ const unfreezeBudget = () => {
 
                 <form @submit.prevent="desbloquearPagina" class="mt-8 space-y-4">
                     <div>
-                        <input 
-                            type="password" 
-                            v-model="inputSenha" 
-                            placeholder="Digite a senha..."
-                            class="w-full text-center text-xl tracking-widest px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 font-bold"
-                            autofocus
-                        >
+                        <input type="password" v-model="inputSenha" placeholder="Digite a senha..." class="w-full text-center text-xl tracking-widest px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 font-bold" autofocus>
                     </div>
-
                     <p v-if="erroSenha" class="text-xs text-red-600 font-bold bg-red-50 py-2 rounded-lg">{{ erroSenha }}</p>
-
-                    <button 
-                        type="submit" 
-                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2"
-                    >
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path></svg>
                         Acessar Budget
                     </button>
@@ -331,11 +330,9 @@ const unfreezeBudget = () => {
             </div>
         </div>
 
-        <!-- 📊 CONTEÚDO PRINCIPAL (EXIBIDO APÓS DESBLOQUEAR) -->
         <div v-else class="py-8 printable-area">
             <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
                 
-                <!-- CABEÇALHO -->
                 <div class="bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex flex-col md:flex-row justify-between items-center no-print">
                     <div>
                         <h2 class="text-2xl font-black text-gray-800 tracking-tight flex items-center gap-2">
@@ -346,36 +343,27 @@ const unfreezeBudget = () => {
                     </div>
                     
                     <div class="flex items-center gap-3 mt-4 md:mt-0 flex-wrap">
-                        
                         <div class="flex gap-2 mr-2">
-                            <button @click="exportarPdf('trimestral')" title="Resumo por Trimestres"
-                                class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
+                            <button @click="exportarPdf('trimestral')" title="Resumo por Trimestres" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                                 <span>PDF Trimestral</span>
                             </button>
-                            
-                            <button @click="exportarPdf('mensal')" title="Detalhamento Mês a Mês"
-                                class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
+                            <button @click="exportarPdf('mensal')" title="Detalhamento Mês a Mês" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
                                 <span>PDF Mensal</span>
                             </button>
                         </div>
-
-                        <button v-if="budgetStatus !== 'Congelado'" @click="freezeBudget" :disabled="isProcessing"
-                            class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
+                        <button v-if="budgetStatus !== 'Congelado'" @click="freezeBudget" :disabled="isProcessing" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
                             {{ isProcessing ? 'Aguarde...' : 'Congelar' }}
                         </button>
-
-                        <button v-if="budgetStatus === 'Congelado'" @click="unfreezeBudget" :disabled="isProcessing"
-                            class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
+                        <button v-if="budgetStatus === 'Congelado'" @click="unfreezeBudget" :disabled="isProcessing" class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-6 rounded-lg shadow flex items-center gap-2 transition-all">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"></path></svg>
                             {{ isProcessing ? 'Aguarde...' : 'Destravar' }}
                         </button>
                     </div>
                 </div>
                 
-                <!-- CARDS DE KPIS -->
                 <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                     <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg p-6 border-l-4" :class="budgetStatus === 'Congelado' ? 'border-green-600 bg-green-50' : 'border-blue-500'">
                         <div class="text-sm uppercase font-bold tracking-wider" :class="budgetStatus === 'Congelado' ? 'text-green-700' : 'text-gray-500'">Status</div>
@@ -402,14 +390,13 @@ const unfreezeBudget = () => {
                     </div>
                 </div>
 
-                <!-- TABELA INTELIGENTE -->
                 <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg border border-gray-200">
                     <div class="p-4 bg-gray-50 border-b border-gray-200 flex justify-between items-center no-print">
                         <h3 class="text-lg font-bold text-gray-700">Previsto (Budget) vs Realizado</h3>
                         <div class="flex items-center gap-3">
                             <span class="text-xs text-blue-800 font-bold bg-blue-100 px-3 py-1.5 rounded-full shadow-sm flex items-center gap-1">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
-                                Clique 1x no valor para editar
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                Dica: Clique no valor para substituir, ou no [+] para somar um novo valor!
                             </span>
                         </div>
                     </div>
@@ -477,7 +464,9 @@ const unfreezeBudget = () => {
                                                 {{ formatCurrency(getItemTotalTrimestre(item, trim.id)) }}
                                             </td>
                                             <template v-if="trimestresExpandidos[trim.id]">
-                                                <td class="px-4 py-3 text-right whitespace-nowrap border-l border-gray-100" v-for="mesNum in trim.meses" :key="'item-mes-'+mesNum" @click="startEditing(item, mesNum, item.valores ? item.valores[mesNum] : 0)">
+                                                <!-- AQUI ENTRA A MÁGICA: O CONTAINER MOSTRA O + QUANDO PASSA O MOUSE -->
+                                                <td class="px-4 py-3 text-right whitespace-nowrap border-l border-gray-100 group" v-for="mesNum in trim.meses" :key="'item-mes-'+mesNum">
+                                                    
                                                     <div v-if="editingCell?.id === item.id && editingCell?.mes === mesNum">
                                                         <input 
                                                             type="text" 
@@ -490,10 +479,20 @@ const unfreezeBudget = () => {
                                                             class="w-28 px-2 py-1 text-sm border-blue-500 rounded focus:ring-blue-500 focus:border-blue-500 text-right shadow-sm font-bold text-gray-900"
                                                         >
                                                     </div>
-                                                    <div v-else class="font-semibold transition-colors flex justify-end items-center gap-1" :class="budgetStatus === 'Congelado' ? 'text-gray-500 cursor-not-allowed' : 'text-blue-600 cursor-pointer hover:bg-blue-100 px-2 py-1 rounded'" :title="budgetStatus === 'Congelado' ? 'Protegido' : 'Clique 1x para editar'">
-                                                        <svg v-if="budgetStatus === 'Congelado'" class="w-3 h-3 text-green-600 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                                                        {{ formatCurrency(item.valores ? item.valores[mesNum] : 0) }}
+                                                    
+                                                    <div v-else class="flex justify-end items-center gap-1.5 relative">
+                                                        <!-- BOTÃO SOMA OCULTO -->
+                                                        <button v-if="budgetStatus !== 'Congelado'" @click.stop="addValorSomado(item, mesNum)" class="opacity-0 group-hover:opacity-100 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded px-2 py-0.5 text-xs font-black transition-all shadow-sm" title="Clique para SOMAR um valor extra">
+                                                            +
+                                                        </button>
+                                                        
+                                                        <!-- TEXTO DO VALOR -->
+                                                        <div @click="startEditing(item, mesNum, item.valores ? item.valores[mesNum] : 0)" class="font-semibold transition-colors flex justify-end items-center gap-1" :class="budgetStatus === 'Congelado' ? 'text-gray-500 cursor-not-allowed' : 'text-blue-600 cursor-pointer hover:bg-blue-100 px-2 py-1 rounded'" :title="budgetStatus === 'Congelado' ? 'Protegido' : 'Clique para substituir'">
+                                                            <svg v-if="budgetStatus === 'Congelado'" class="w-3 h-3 text-green-600 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                                                            {{ formatCurrency(item.valores ? item.valores[mesNum] : 0) }}
+                                                        </div>
                                                     </div>
+                                                    
                                                 </td>
                                             </template>
                                         </template>

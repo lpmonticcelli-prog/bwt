@@ -9,10 +9,19 @@ class BudgetItem extends Model
 {
     use HasFactory;
 
-    protected $guarded = [];
+    protected $table = 'budget_items';
 
+    protected $fillable = [
+        'budget_id',
+        'categoria',
+        'nome',
+        'valores',
+    ];
+
+    // ESTA É A MÁGICA PARA O BANCO DE DADOS!
+    // Transforma o array do PHP em JSON pro MySQL e vice-versa automaticamente.
     protected $casts = [
-        'valores_mensais' => 'array', 
+        'valores' => 'json',
     ];
 
     public function budget()
