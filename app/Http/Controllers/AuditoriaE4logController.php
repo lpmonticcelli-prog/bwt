@@ -209,8 +209,8 @@ class AuditoriaE4logController extends Controller
                         $freteCalculado = $valorCarga * $percentual;
                         $valorFreteSla = max($minimo, $freteCalculado);
                         
-                        // 2) TDE SLA: Mínimo de R$ 160,00 ou 20% do valor do frete calculado
-                        $valorTdeSla = $temTde ? max(160.00, $valorFreteSla * 0.20) : 0;
+                        // 2) TDE SLA: Mínimo de R$ 176,00 ou 20% do valor do frete calculado
+                        $valorTdeSla = $temTde ? max(176.00, $valorFreteSla * 0.20) : 0;
                         
                         // 3) SOMA SLA
                         $valorSlaCorreto = $valorFreteSla + $valorTdeSla;
@@ -334,9 +334,9 @@ class AuditoriaE4logController extends Controller
                         
                         $freteSlaPai = $agrupados[$chavePai]['valor_frete_sla'];
                         
-                        // Garante que o SLA do TDE seja calculado (Mín 160 ou 20%)
+                        // Garante que o SLA do TDE seja calculado (Mín 176 ou 20%)
                         if ($agrupados[$chavePai]['valor_tde_sla'] == 0) {
-                            $agrupados[$chavePai]['valor_tde_sla'] = max(160.00, $freteSlaPai * 0.20);
+                            $agrupados[$chavePai]['valor_tde_sla'] = max(176.00, $freteSlaPai * 0.20);
                             $agrupados[$chavePai]['valor_sla'] = $freteSlaPai + $agrupados[$chavePai]['valor_tde_sla'];
                         }
 
@@ -404,7 +404,7 @@ class AuditoriaE4logController extends Controller
 
         foreach (self::REGRAS_REGIAO as $nome => $regra) {
             $valorFrete = max($regra['min'], $valorCarga * $regra['pct']);
-            $tde = $temTde ? max(160.00, $valorFrete * 0.20) : 0;
+            $tde = $temTde ? max(176.00, $valorFrete * 0.20) : 0;
             
             if (abs(($valorFrete + $tde) - $valorCobrado) <= 1.50) {
                 return ['nome' => $nome . ' (Calc)', 'pct' => ($regra['pct'] * 100) . '%'];

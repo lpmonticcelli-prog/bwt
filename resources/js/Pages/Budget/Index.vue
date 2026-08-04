@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue';
 import ErpLayout from '@/Layouts/ErpLayout.vue';
 import { Head, router } from '@inertiajs/vue3';
+import axios from 'axios'; // NOVO IMPORT: Para o nosso Raio-X bater na API interna
 
 const props = defineProps({
     budgetId: Number,
@@ -38,6 +39,35 @@ onMounted(() => {
         isUnlocked.value = true;
     }
 });
+
+// ==========================================
+// NOVO: SINCRONIZAÇÃO SSW (BOTÃO PUXAR)
+// ==========================================
+const isSyncingSsw = ref(false);
+
+const syncSsw = () => {
+    if (props.budgetStatus === 'Congelado') {
+        alert('Este orçamento está congelado e não pode ser alterado.');
+        return;
+    }
+
+    if (confirm('🔄 Deseja conectar à SSW e importar os dados liquidados mais recentes agora?\n\nIsso atualizará os valores do Budget.')) {
+        isSyncingSsw.value = true;
+        
+        router.post(route('budget.ssw-sync'), {}, {
+            preserveScroll: true,
+            onSuccess: () => {
+                // A mensagem de sucesso virá da flash message do Laravel
+            },
+            onError: () => {
+                alert('Ocorreu um erro ao tentar sincronizar com a SSW.');
+            },
+            onFinish: () => { 
+                isSyncingSsw.value = false; 
+            }
+        });
+    }
+};
 
 const exportarPdf = (tipo) => {
     window.open(route('budget.exportar-pdf') + '?tipo=' + tipo, '_blank');
@@ -125,7 +155,7 @@ const formatPercent = (value) => {
 };
 
 // ==========================================
-// CÁLCULOS BLINDADOS CONTRA ACENTOS (NOVO!)
+// CÁLCULOS BLINDADOS CONTRA ACENTOS
 // ==========================================
 const normalizeString = (str) => {
     return (str || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -300,6 +330,48 @@ const unfreezeBudget = () => {
         router.post(route('budget.descongelar', props.budgetId), {}, { preserveScroll: true, onFinish: () => { isProcessing.value = false; }});
     }
 };
+
+// ==========================================
+// LÓGICA DO MODAL RAIO-X SSW
+// ==========================================
+const showSswModal = ref(false);
+const sswExtrato = ref([]);
+const isFetchingSsw = ref(false);
+const sswModalInfo = ref({});
+
+const openSswRaioX = async (item, mesNum) => {
+    showSswModal.value = true;
+    isFetchingSsw.value = true;
+    sswExtrato.value = [];
+    
+    sswModalInfo.value = {
+        linha: item.nome,
+        mes: meses.find(m => m.num === mesNum).nome,
+        ano: props.budgetAno
+    };
+
+    try {
+        const response = await axios.get(route('budget.ssw-extrato'), {
+            params: {
+                ano: props.budgetAno,
+                mes: mesNum,
+                linha_nome: item.nome
+            }
+        });
+        sswExtrato.value = response.data;
+    } catch (error) {
+        console.error("Erro ao buscar extrato SSW:", error);
+        alert("Ocorreu um erro ao buscar os dados da SSW.");
+    } finally {
+        isFetchingSsw.value = false;
+    }
+};
+
+const formatDataSsw = (dataString) => {
+    if (!dataString) return '-';
+    const d = new Date(dataString);
+    return d.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+};
 </script>
 
 <template>
@@ -343,6 +415,16 @@ const unfreezeBudget = () => {
                     </div>
                     
                     <div class="flex items-center gap-3 mt-4 md:mt-0 flex-wrap">
+                        
+                        <!-- NOVO BOTÃO DE SINCRONIZAR SSW -->
+                        <div class="flex gap-2 mr-2 border-r border-gray-200 pr-4">
+                            <button @click="syncSsw" :disabled="isSyncingSsw || budgetStatus === 'Congelado'" title="Puxar dados atualizados da SSW" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                                <svg v-if="isSyncingSsw" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                <span>{{ isSyncingSsw ? 'Puxando...' : 'Puxar SSW' }}</span>
+                            </button>
+                        </div>
+
                         <div class="flex gap-2 mr-2">
                             <button @click="exportarPdf('trimestral')" title="Resumo por Trimestres" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded-lg shadow flex items-center gap-2 transition-all">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
@@ -396,7 +478,7 @@ const unfreezeBudget = () => {
                         <div class="flex items-center gap-3">
                             <span class="text-xs text-blue-800 font-bold bg-blue-100 px-3 py-1.5 rounded-full shadow-sm flex items-center gap-1">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                                Dica: Clique no valor para substituir, ou no [+] para somar um novo valor!
+                                Dica: Clique na LUPA para o Raio-X da SSW, ou no [+] para somar um novo valor!
                             </span>
                         </div>
                     </div>
@@ -464,7 +546,6 @@ const unfreezeBudget = () => {
                                                 {{ formatCurrency(getItemTotalTrimestre(item, trim.id)) }}
                                             </td>
                                             <template v-if="trimestresExpandidos[trim.id]">
-                                                <!-- AQUI ENTRA A MÁGICA: O CONTAINER MOSTRA O + QUANDO PASSA O MOUSE -->
                                                 <td class="px-4 py-3 text-right whitespace-nowrap border-l border-gray-100 group" v-for="mesNum in trim.meses" :key="'item-mes-'+mesNum">
                                                     
                                                     <div v-if="editingCell?.id === item.id && editingCell?.mes === mesNum">
@@ -481,6 +562,12 @@ const unfreezeBudget = () => {
                                                     </div>
                                                     
                                                     <div v-else class="flex justify-end items-center gap-1.5 relative">
+                                                        
+                                                        <!-- NOVO: BOTÃO LUPA RAIO-X SSW -->
+                                                        <button @click.stop="openSswRaioX(item, mesNum)" class="opacity-0 group-hover:opacity-100 bg-blue-100 text-blue-700 hover:bg-blue-600 hover:text-white rounded px-2 py-0.5 text-xs font-black transition-all shadow-sm" title="Raio-X: Ver Extrato SSW desta conta">
+                                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                                        </button>
+
                                                         <!-- BOTÃO SOMA OCULTO -->
                                                         <button v-if="budgetStatus !== 'Congelado'" @click.stop="addValorSomado(item, mesNum)" class="opacity-0 group-hover:opacity-100 bg-emerald-100 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded px-2 py-0.5 text-xs font-black transition-all shadow-sm" title="Clique para SOMAR um valor extra">
                                                             +
@@ -550,6 +637,89 @@ const unfreezeBudget = () => {
 
             </div>
         </div>
+        
+        <!-- ========================================== -->
+        <!-- NOVO MODAL RAIO-X SSW -->
+        <!-- ========================================== -->
+        <div v-if="showSswModal" class="fixed inset-0 z-50 overflow-y-auto no-print" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+            <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+                <div class="fixed inset-0 bg-gray-900 bg-opacity-75 transition-opacity" @click="showSswModal = false"></div>
+                <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-2xl transform transition-all sm:my-8 sm:align-middle sm:max-w-5xl sm:w-full border border-gray-300">
+                    
+                    <!-- Cabeçalho do Modal -->
+                    <div class="bg-blue-900 px-6 py-4 flex items-center justify-between">
+                        <h3 class="text-xl font-black text-white flex items-center gap-2" id="modal-title">
+                            <svg class="w-6 h-6 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                            RAIO-X SSW: {{ sswModalInfo.linha }} ({{ sswModalInfo.mes }}/{{ sswModalInfo.ano }})
+                        </h3>
+                        <button @click="showSswModal = false" class="text-blue-300 hover:text-white transition-colors">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+
+                    <!-- Corpo do Modal -->
+                    <div class="bg-white px-6 pt-5 pb-6">
+                        <div v-if="isFetchingSsw" class="flex flex-col items-center justify-center py-12">
+                            <svg class="animate-spin h-10 w-10 text-blue-600 mb-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            <p class="text-gray-500 font-bold text-lg">Buscando extrato oficial na base de dados...</p>
+                        </div>
+                        
+                        <div v-else-if="sswExtrato.length === 0" class="text-gray-500 font-bold bg-gray-50 border border-gray-200 p-8 rounded-lg text-center flex flex-col items-center">
+                            <svg class="w-12 h-12 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            Nenhuma despesa ou receita da SSW mapeada para esta conta neste mês.
+                            <span class="text-sm font-normal text-gray-400 mt-1">Isso significa que o valor atual desta linha foi inserido manualmente.</span>
+                        </div>
+                        
+                        <div v-else class="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+                            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                                <thead class="bg-gray-100">
+                                    <tr>
+                                        <th class="px-4 py-3 text-left text-xs font-black text-gray-600 uppercase tracking-wider">Inclusão</th>
+                                        <th class="px-4 py-3 text-left text-xs font-black text-gray-600 uppercase tracking-wider">Filial</th>
+                                        <th class="px-4 py-3 text-left text-xs font-black text-gray-600 uppercase tracking-wider">Fornecedor</th>
+                                        <th class="px-4 py-3 text-left text-xs font-black text-gray-600 uppercase tracking-wider">Histórico</th>
+                                        <th class="px-4 py-3 text-center text-xs font-black text-gray-600 uppercase tracking-wider">Situação</th>
+                                        <th class="px-4 py-3 text-right text-xs font-black text-gray-600 uppercase tracking-wider">Valor (R$)</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-100">
+                                    <tr v-for="l in sswExtrato" :key="l.lancamento" class="hover:bg-blue-50 transition-colors group">
+                                        <td class="px-4 py-3 whitespace-nowrap text-gray-500 font-medium">{{ formatDataSsw(l.inclusao) }}</td>
+                                        <td class="px-4 py-3 whitespace-nowrap font-black text-gray-700">{{ l.filial }}</td>
+                                        <td class="px-4 py-3 text-gray-800 font-semibold group-hover:text-blue-700">{{ l.fornecedor }}</td>
+                                        <td class="px-4 py-3 text-gray-500 text-xs truncate max-w-xs" :title="l.historico">{{ l.historico }}</td>
+                                        <td class="px-4 py-3 whitespace-nowrap text-center">
+                                            <span class="px-2.5 py-1 text-[10px] uppercase tracking-wider rounded-md font-black shadow-sm" :class="l.situacao === 'Liquidado' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-yellow-100 text-yellow-800 border border-yellow-200'">
+                                                {{ l.situacao }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-3 whitespace-nowrap text-right font-black" :class="l.situacao === 'Liquidado' ? 'text-gray-900' : 'text-gray-400 line-through'">
+                                            {{ formatCurrency(l.valor) }}
+                                        </td>
+                                    </tr>
+                                </tbody>
+                                <tfoot class="bg-gray-100 border-t-2 border-gray-300 font-black">
+                                    <tr>
+                                        <td colspan="5" class="px-4 py-3 text-right text-gray-600 uppercase tracking-wider text-xs">Total de Lançamentos Liquidados:</td>
+                                        <td class="px-4 py-3 text-right text-blue-700 text-base">
+                                            {{ formatCurrency(sswExtrato.filter(x => x.situacao === 'Liquidado').reduce((a,b) => a + parseFloat(b.valor), 0)) }}
+                                        </td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- Rodapé do Modal -->
+                    <div class="bg-gray-50 px-6 py-4 flex flex-row-reverse rounded-b-lg border-t border-gray-200">
+                        <button type="button" class="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-6 py-2.5 bg-gray-800 text-sm font-bold text-white hover:bg-gray-900 transition-colors sm:ml-3 sm:w-auto" @click="showSswModal = false">
+                            Fechar Raio-X
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </ErpLayout>
 </template>
 

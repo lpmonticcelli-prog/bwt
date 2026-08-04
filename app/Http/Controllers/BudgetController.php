@@ -4,9 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\Budget;
 use App\Models\BudgetItem;
+use App\Models\SswDespesa; // NOVO IMPORT DA SSW
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
 
 class BudgetController extends Controller
 {
@@ -232,5 +235,72 @@ class BudgetController extends Controller
         $budget->status = 'Rascunho';
         $budget->save();
         return back()->with('success', 'Orçamento DESTRAVADO!');
+    }
+
+    // ==========================================
+    // CÉREBRO SSW: MAPA DE CATEGORIAS (DE -> PARA) (NOVO)
+    // ==========================================
+    private function getSswEventosPorLinha($linhaNome)
+    {
+        // Aqui nós dizemos para o sistema quais códigos da SSW alimentam qual linha do seu Budget.
+        // Você pode editar esses nomes à esquerda para baterem exatamente com o nome das linhas que você criou na sua tela.
+        $mapa = [
+            'CUSTOS FROTA' => ['5409-MANUTE', '5403-PEDAGI', '5407-COMBU', '5402-SEGUR', '5502-SEGUR'],
+            'DESPESAS BANCARIAS' => ['5317-TARIFA'],
+            'DESPESAS OPERACIONAIS' => ['5306-TELEFO', '5301-ALUGUE', '5305-ENERGI', '5314-GEREN', '5806-SISTEM', '5244-MATERI'],
+            'FOLHA DE PAGAMENTO' => ['5216-SALARI', '5466-PRO-LA', '5203-ALIMEN'],
+            'FRETES TERCEIROS' => ['5101-FRETE', '5103-FRETE'],
+            'ACERTOS DIVERSOS' => ['5210-ACERTO'],
+        ];
+
+        return $mapa[trim($linhaNome)] ?? [];
+    }
+
+    // ==========================================
+    // RAIO-X SSW: ENDPOINT PARA O MODAL NO VUE.JS (NOVO)
+    // ==========================================
+    public function showSswExtrato(Request $request)
+    {
+        $ano = $request->query('ano', date('Y'));
+        $mes = $request->query('mes');
+        $linhaNome = $request->query('linha_nome');
+
+        // Formata a competência para o padrão exato da SSW (Ex: Mês 7 e Ano 2026 vira "07/26")
+        $competenciaSsw = sprintf("%02d/%s", $mes, substr($ano, -2));
+
+        // Descobre quais eventos buscar no banco baseado no nome da linha clicada
+        $eventos = $this->getSswEventosPorLinha($linhaNome);
+
+        // Se a linha não tem vínculo com a SSW (ex: "Empilhadeira" manual), retorna vazio
+        if (empty($eventos)) {
+            return response()->json([]);
+        }
+
+        // Busca o extrato blindado direto da nossa nova tabela!
+        $extrato = SswDespesa::where('competencia', $competenciaSsw)
+            ->whereIn('evento', $eventos)
+            ->orderBy('situacao', 'desc') // Joga os "Liquidados" pro topo
+            ->orderBy('inclusao', 'asc')
+            ->get();
+
+        return response()->json($extrato);
+    }
+
+    // ==========================================
+    // BOTÃO DE SINCRONIZAÇÃO MANUAL SSW
+    // ==========================================
+    public function syncSsw(Request $request)
+    {
+        try {
+            // Aciona o motor/robô em tempo real
+            Artisan::call('ssw:sync');
+            
+            // Retorna o resultado para a tela
+            return back()->with('success', 'Integração SSW concluída! O Budget foi atualizado com base nos dados liquidados.');
+            
+        } catch (\Exception $e) {
+            Log::error("Erro no botão SSW: " . $e->getMessage());
+            return back()->with('error', 'Ocorreu um erro ao conectar com o Servidor BI da SSW. Tente novamente mais tarde.');
+        }
     }
 }

@@ -107,6 +107,12 @@ Route::middleware('auth')->group(function () {
         Route::get('/', 'index')->name('index');
         Route::get('/exportar-pdf', 'exportarPdf')->name('exportar-pdf');
         
+        // ==========================================
+        // ROTAS SSW
+        // ==========================================
+        Route::get('/ssw-extrato', 'showSswExtrato')->name('ssw-extrato');
+        Route::post('/ssw-sync', 'syncSsw')->name('ssw-sync'); // <-- ROTA ADICIONADA AQUI!
+        
         // --> Rota nova para o botão "+ Linha"
         Route::post('/{id}/add-item', 'addItem')->name('item.store'); 
         
