@@ -3,155 +3,138 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Http; // <-- MUDOU AQUI: Usando o motor HTTP
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use App\Models\SswDespesa;
 use App\Models\Budget;
-use Illuminate\Support\Str;
 use Carbon\Carbon;
 
 class SyncSswCommand extends Command
 {
     protected $signature = 'ssw:sync';
-    protected $description = 'Conecta na WebAPI da SSW, puxa TUDO de MTZ/IND e injeta 100% no Budget.';
+    protected $description = 'Sincroniza SSW garantindo Filial no nome, espelho exato e roteamento rigoroso.';
 
     public function handle()
     {
-        $this->info("Iniciando motor de sincronização SSW (Modo WebAPI - Bypassing FTP)...");
-        Log::info("SSW Sync: Iniciado via API HTTPS.");
+        $this->info("Iniciando motor SSW com Identificação de Filial Dinâmica e Roteamento Avançado...");
 
-        // ==========================================
-        // CONFIGURAÇÕES DA API (Baseado no Vídeo)
-        // ==========================================
-        $dominio  = 'BW1'; // A Sigla da sua empresa que vimos na imagem anterior
-        $pasta    = 'caixa'; // <-- AJUSTE AQUI: O nome da pasta onde a SSW joga o CSV financeiro
-        $codigo   = '0013';  // <-- AJUSTE AQUI: O código do relatório gerado (se exigido)
-        
-        // A Mágica do Vídeo: Transformando a senha em Hash MD5
+        $dominio  = 'BW1';
         $senhaBi2 = env('SSW_BI2_PASSWORD');
         $hashMd5  = md5($senhaBi2); 
 
-        // Montando a URL exata ensinada no vídeo
-        $url = "https://ssw.inf.br/api/bi2/{$dominio}/{$pasta}?codigo={$codigo}";
+        // ==========================================
+        // ESTÁGIO 1: CONTAS A PAGAR (DESPESAS & IMPOSTOS SSW)
+        // ==========================================
+        $this->info("Puxando TODAS as Despesas e Impostos da SSW...");
+        $urlDespesas = "https://ssw.inf.br/api/bi2/{$dominio}/caixa?codigo=0202";
         
-        $this->info("Conectando de forma segura em: {$url}");
-
         try {
-            // Requisição HTTPS ignorando Firewall
-            $response = Http::withHeaders([
-                'Authorization' => 'Basic ' . $hashMd5
-            ])->timeout(30)->get($url);
-
-            if ($response->failed()) {
-                $this->error("Erro na API da SSW: Código " . $response->status());
-                Log::error("SSW API Error: " . $response->body());
-                return Command::FAILURE;
-            }
-
-            $conteudo = $response->body();
-            
-            // Tratamento caso a SSW devolva um HTML de erro em vez do CSV
-            if (empty(trim($conteudo)) || str_contains($conteudo, '<html')) {
-                $this->warn("A API respondeu, mas não retornou um CSV válido. Verifique se a variável \$pasta ou \$codigo estão corretas no código.");
-                Log::warning("SSW Retorno Inválido: " . substr($conteudo, 0, 100));
-                return Command::SUCCESS;
-            }
-
-            $this->info("Arquivo CSV baixado com sucesso! Processando as linhas...");
-            
-            // O conteúdo já é o CSV pronto! Vamos fatiar.
-            $linhas = explode("\n", $conteudo);
-            $headerProcessado = false;
-            
-            foreach ($linhas as $linha) {
-                if (empty(trim($linha))) continue;
+            $response = Http::withHeaders(['Authorization' => 'Basic ' . $hashMd5])->timeout(30)->get($urlDespesas);
+            if ($response->successful() && !str_contains($response->body(), '<html')) {
+                $linhas = explode("\n", $response->body());
+                $headerProcessado = false;
                 
-                $colunas = str_getcsv($linha, ';'); 
-                
-                if (!$headerProcessado) {
-                    $headerProcessado = true;
-                    continue;
+                foreach ($linhas as $linha) {
+                    if (empty(trim($linha))) continue;
+                    $colunas = str_getcsv($linha, ';'); 
+                    if (!$headerProcessado) { $headerProcessado = true; continue; }
+                    if (count($colunas) < 5) continue;
+
+                    $lancamento = trim($colunas[0] ?? '');
+                    $filial     = trim($colunas[1] ?? '');
+                    $fornecedor = trim($colunas[2] ?? '');
+                    $evento     = trim($colunas[3] ?? '');
+                    $valor      = $this->limparMoeda($colunas[4] ?? '0');
+                    $vencimento = trim($colunas[5] ?? '');
+                    $pagamento  = trim($colunas[6] ?? '');
+
+                    $competencia = null;
+                    if (!empty($vencimento)) {
+                        $partes = explode('/', $vencimento);
+                        if (count($partes) >= 3) $competencia = $partes[1] . '/' . $partes[2];
+                    }
+
+                    SswDespesa::updateOrCreate(
+                        ['lancamento' => $lancamento],
+                        [
+                            'inclusao'    => $this->formatarData($vencimento) ?? date('Y-m-d'),
+                            'filial'      => $filial,
+                            'evento'      => $evento,
+                            'historico'   => $evento,
+                            'fornecedor'  => $fornecedor,
+                            'nota_fiscal' => 'N/D',
+                            'valor'       => $valor,
+                            'vencimento'  => $this->formatarData($vencimento),
+                            'pagamento'   => $this->formatarData($pagamento),
+                            'competencia' => $competencia,
+                            'situacao'    => !empty($pagamento) ? 'Liquidado' : 'Pendente',
+                            'tipo'        => 'DESPESA'
+                        ]
+                    );
                 }
-
-                if (count($colunas) < 12) continue;
-
-                $lancamento = trim($colunas[0]);
-                $filial     = trim($colunas[2]);
-                
-                if (!preg_match('/^(IND|MTZ)/i', $filial)) continue; 
-
-                $evento      = trim($colunas[3]);
-                $historico   = trim($colunas[4]);
-                $fornecedor  = trim($colunas[5]);
-                $notaFiscal  = trim($colunas[6]);
-                $valor       = $this->limparMoeda($colunas[7]);
-                $competencia = trim($colunas[10]); 
-                $situacao    = trim($colunas[11]); 
-
-                SswDespesa::updateOrCreate(
-                    ['lancamento' => $lancamento],
-                    [
-                        'inclusao'    => $this->formatarData($colunas[1]),
-                        'filial'      => $filial,
-                        'evento'      => $evento,
-                        'historico'   => $historico,
-                        'fornecedor'  => $fornecedor,
-                        'nota_fiscal' => $notaFiscal,
-                        'valor'       => $valor,
-                        'vencimento'  => $this->formatarData($colunas[8]),
-                        'pagamento'   => $this->formatarData($colunas[9]),
-                        'competencia' => $competencia,
-                        'situacao'    => $situacao,
-                    ]
-                );
             }
+        } catch (\Exception $e) { $this->error("Erro em Despesas: " . $e->getMessage()); }
 
-            $this->info("Leitura da API finalizada. Recalculando Budget...");
-            $this->recalcularBudgetAnual();
-            
-            $this->info("Sincronização 100% concluída!");
-            return Command::SUCCESS;
+        // ==========================================
+        // ESTÁGIO 2: FATURAS EMITIDAS (RECEITAS)
+        // ==========================================
+        $this->info("Puxando TODAS as Receitas (Faturamento)...");
+        $urlReceitas = "https://ssw.inf.br/api/bi2/{$dominio}/caixa?codigo=0241";
+        
+        try {
+            $response = Http::withHeaders(['Authorization' => 'Basic ' . $hashMd5])->timeout(30)->get($urlReceitas);
+            if ($response->successful() && !str_contains($response->body(), '<html')) {
+                $linhas = explode("\n", $response->body());
+                foreach ($linhas as $linha) {
+                    if (empty(trim($linha))) continue;
+                    $colunas = str_getcsv($linha, ';'); 
+                    if (!isset($colunas[0]) || trim($colunas[0]) !== '2') continue;
+                    if (count($colunas) < 30) continue; 
 
-        } catch (\Exception $e) {
-            $this->error("Erro de Sistema: " . $e->getMessage());
-            Log::error("SSW API System Error: " . $e->getMessage());
-            return Command::FAILURE;
-        }
+                    $lancamento = "FAT-" . trim($colunas[1] ?? ''); 
+                    $filial     = trim($colunas[19] ?? '');
+                    $cliente    = trim($colunas[3] ?? '');
+                    $vencimento = trim($colunas[23] ?? '');
+                    $pagamento  = trim($colunas[26] ?? '');
+                    $situacaoFatura = trim($colunas[30] ?? '');
+                    
+                    $valorFatura = $this->limparMoeda($colunas[38] ?? '0');
+                    if ($valorFatura == 0) $valorFatura = $this->limparMoeda($colunas[34] ?? '0');
+
+                    $competencia = null;
+                    if (!empty($vencimento)) {
+                        $partes = explode('/', $vencimento);
+                        if (count($partes) >= 3) $competencia = $partes[1] . '/' . $partes[2];
+                    }
+
+                    SswDespesa::updateOrCreate(
+                        ['lancamento' => $lancamento],
+                        [
+                            'inclusao'    => $this->formatarData($vencimento) ?? date('Y-m-d'),
+                            'filial'      => $filial,
+                            'evento'      => 'RECEITA BRUTA', 
+                            'historico'   => 'FATURAMENTO',
+                            'fornecedor'  => $cliente, 
+                            'nota_fiscal' => 'N/D',
+                            'valor'       => $valorFatura,
+                            'vencimento'  => $this->formatarData($vencimento),
+                            'pagamento'   => $this->formatarData($pagamento),
+                            'competencia' => $competencia,
+                            'situacao'    => ($situacaoFatura === 'LIQUIDADO' || !empty($pagamento)) ? 'Liquidado' : 'Pendente',
+                            'tipo'        => 'RECEITA'
+                        ]
+                    );
+                }
+            }
+        } catch (\Exception $e) { $this->error("Erro em Receitas: " . $e->getMessage()); }
+
+        $this->info("Recalculando DRE e extraindo siglas de filiais dinamicamente...");
+        $this->recalcularBudgetAnual();
+        
+        $this->info("Sincronização do Espelho Perfeito 100% concluída!");
+        return Command::SUCCESS;
     }
 
-    // ==========================================
-    // A INTELIGÊNCIA ARTIFICIAL: LEITURA DE HISTÓRICO
-    // ==========================================
-    private function descobrirLinhaBudget($historico, $fornecedor, $evento)
-    {
-        $hist = Str::ascii(mb_strtoupper(trim($historico), 'UTF-8'));
-        $forn = Str::ascii(mb_strtoupper(trim($fornecedor), 'UTF-8'));
-        $eventoTratado = mb_strtoupper(trim($evento), 'UTF-8');
-        
-        if (str_contains($hist, 'TELEFONE') || str_contains($hist, 'CELULAR') || str_contains($forn, 'VIVO')) return 'TELEFONE';
-        if (str_contains($hist, 'COOWORKING') || str_contains($forn, 'TILIT')) return 'COWORK SJC';
-        if (str_contains($hist, 'CONTABILIDADE') || str_contains($forn, 'MASTER CONTABIL')) return 'CONTABILIDADE';
-        if (str_contains($hist, 'SSW') || str_contains($forn, 'SSW')) return 'SSW';
-        if (str_contains($hist, 'PRO LABORE') || str_contains($evento, '5466')) return 'PRO LABORE';
-        if (str_contains($hist, 'MARIA CLARA')) return 'MARIA CLARA (MEI)';
-        if (str_contains($hist, 'ENERGIA')) return 'CONTA DE ENERGIA';
-
-        if (str_contains($hist, 'E4LOG') || str_contains($forn, 'E4LOG')) return 'FECHAMENTO E4LOG';
-        if (str_contains($hist, 'SEGURO') && (str_contains($forn, 'ALLIANZ') || str_contains($forn, 'SOMPO') || str_contains($forn, 'TOKIO'))) return 'SEGURO DE CARGA - TOKIO MARINE - SOMPO';
-        if (str_contains($hist, 'COMISSAO MAURICIO')) return 'COMISSAO MAURÍCIO';
-        if (str_contains($hist, 'MONITORAMENTO') || str_contains($hist, 'GERENCIAMENTO') || str_contains($forn, 'TS CONTROL')) return 'GERENCIAMENTO RISCO';
-        if (str_contains($hist, 'PEDAGIO')) return 'PEDAGIO BRUNO';
-        if (str_contains($hist, 'COLETA') || str_contains($hist, 'FRETE')) return 'CUSTO DE COLETA';
-        
-        if (str_contains($hist, 'TARIFA') || str_contains($hist, 'CARTAO')) return 'DESPESA BANCARIA';
-        if (str_contains($hist, 'ICMS') || str_contains($hist, 'PIS') || str_contains($hist, 'COFINS') || str_contains($hist, 'IRPJ') || str_contains($hist, 'CSLL')) return 'IMPOSTOS E TAXAS';
-
-        return $eventoTratado; 
-    }
-
-    // ==========================================
-    // INJEÇÃO TOTAL NO BUDGET
-    // ==========================================
     private function recalcularBudgetAnual()
     {
         $anoAtual = date('Y');
@@ -160,64 +143,133 @@ class SyncSswCommand extends Command
         $budget = Budget::with('items')->where('ano', $anoAtual)->first();
         if (!$budget) return;
 
-        foreach ($budget->items as $item) {
-            $item->valores_mensais = json_encode(array_fill_keys(range(1, 12), 0));
-            $item->save();
-        }
-
-        $despesas = SswDespesa::where('situacao', 'Liquidado')
+        $movimentacoes = SswDespesa::whereIn('situacao', ['Liquidado', 'Pendente'])
             ->where('competencia', 'like', "%/{$anoSsw}")
             ->get();
 
+        $mesesDominadosPelaSsw = [];
         $valoresAgrupados = []; 
+        $tiposAgrupados = [];
         
-        foreach ($despesas as $desp) {
-            $linhaDestino = $this->descobrirLinhaBudget($desp->historico, $desp->fornecedor, $desp->evento);
-            $mesInt = (int) explode('/', $desp->competencia)[0]; 
+        foreach ($movimentacoes as $mov) {
+            $fornecedor = trim($mov->fornecedor);
+            $evento = trim($mov->evento);
+            $filialBruta = mb_strtoupper(trim($mov->filial), 'UTF-8');
+
+            if (empty($fornecedor)) $fornecedor = "FORNECEDOR DIVERSO";
+            if (empty($evento)) $evento = trim($mov->historico);
+            if (empty($evento)) $evento = "DESPESA NAO IDENTIFICADA";
+            
+            // ==========================================
+            // EXTRAÇÃO INTELIGENTE DE QUALQUER SIGLA DE 3 LETRAS
+            // ==========================================
+            $filialLimpa = 'GERAL';
+            if (!empty($filialBruta)) {
+                // Procura pelas 3 primeiras letras seguidas, ignorando números e espaços
+                preg_match('/[A-Z]{3}/', preg_replace('/[^A-Z]/', '', $filialBruta), $matches);
+                if (!empty($matches[0])) {
+                    $filialLimpa = $matches[0];
+                }
+            }
+            
+            // O NOME EXATO DO ESPELHO COM FILIAL LIMPA E DINÂMICA
+            $linhaDestino = mb_strtoupper('[' . $filialLimpa . '] ' . $fornecedor . ' - ' . $evento, 'UTF-8');
+            $mesInt = (int) explode('/', $mov->competencia)[0]; 
 
             if ($linhaDestino && $mesInt >= 1 && $mesInt <= 12) {
+                if (!in_array($mesInt, $mesesDominadosPelaSsw)) {
+                    $mesesDominadosPelaSsw[] = $mesInt;
+                }
                 if (!isset($valoresAgrupados[$linhaDestino])) {
                     $valoresAgrupados[$linhaDestino] = array_fill_keys(range(1, 12), 0);
+                    $tiposAgrupados[$linhaDestino] = $mov->tipo;
                 }
-                $valoresAgrupados[$linhaDestino][$mesInt] += $desp->valor;
+                $valoresAgrupados[$linhaDestino][$mesInt] += $mov->valor;
             }
         }
 
+        // ==========================================
+        // IMPOSTO AUTOMÁTICO (10% LÍQUIDO)
+        // ==========================================
+        $impostosCalculados = array_fill_keys(range(1, 12), 0);
+        foreach ($valoresAgrupados as $linha => $mesesValores) {
+            // Conta 10% APENAS sobre Faturamento (Receita Bruta)
+            if (preg_match('/\b(RECEITA BRUTA)\b/i', $linha)) {
+                foreach ($mesesDominadosPelaSsw as $mes) {
+                    $impostosCalculados[$mes] += $mesesValores[$mes] * 0.10; 
+                }
+            }
+        }
+        $valoresAgrupados['[SISTEMA] IMPOSTO SOBRE FATURAMENTO (10%)'] = $impostosCalculados;
+        $tiposAgrupados['[SISTEMA] IMPOSTO SOBRE FATURAMENTO (10%)'] = 'IMPOSTO';
+
+        // LIMPA OS MESES DA SSW NAS CONTAS EXISTENTES (Protege manual)
+        foreach ($budget->items as $item) {
+            $valoresAtuais = json_decode($item->valores_mensais, true) ?? array_fill_keys(range(1, 12), 0);
+            foreach ($mesesDominadosPelaSsw as $m) {
+                $valoresAtuais[$m] = 0; 
+            }
+            $item->valores_mensais = json_encode($valoresAtuais);
+            $item->save();
+        }
+
+        // ==========================================
+        // MURALHA DE ROTEAMENTO (BLINDADA CONTRA FALSOS POSITIVOS)
+        // ==========================================
         foreach ($valoresAgrupados as $nomeDaLinha => $mesesValores) {
-            $budgetItem = $budget->items->where('nome', $nomeDaLinha)->first();
+            $tipo = $tiposAgrupados[$nomeDaLinha] ?? 'DESPESA';
             
+            // REGRA 1: Verifica primeiro se é Imposto
+            if (
+                $tipo === 'IMPOSTO' || 
+                preg_match('/\b(IMPOSTO|IMPOSTOS|ICMS|PIS|COFINS|IRPJ|CSLL|DARF|SIMPLES)\b/i', $nomeDaLinha)
+            ) {
+                $categoriaDestino = 'IMPOSTOS';
+            } 
+            // REGRA 2: Depois verifica se é Receita
+            elseif (
+                $tipo === 'RECEITA' || 
+                preg_match('/\b(RECEITA BRUTA|FATURAMENTO)\b/i', $nomeDaLinha)
+            ) {
+                $categoriaDestino = 'RECEITAS';
+            } 
+            // REGRA 3: Se não é nenhum dos dois, cai em Custos Operacionais
+            else {
+                $categoriaDestino = 'CUSTOS OPERACIONAIS';
+            }
+
+            $budgetItem = $budget->items->where('nome', $nomeDaLinha)->first();
+
             if (!$budgetItem) {
-                $isEventoSsw = preg_match('/^[0-9]{4}-/', $nomeDaLinha);
                 $budgetItem = $budget->items()->create([
-                    'categoria' => $isEventoSsw ? 'SSW - FORA DO BUDGET' : 'CUSTOS OPERACIONAIS',
+                    'categoria' => $categoriaDestino,
                     'nome' => $nomeDaLinha,
                     'valores_mensais' => json_encode(array_fill_keys(range(1, 12), 0)),
                     'valores_originais' => json_encode(array_fill_keys(range(1, 12), 0)),
                 ]);
-                $budget->load('items');
+            } else {
+                // FORÇA A ATUALIZAÇÃO DA CATEGORIA PARA LIMPAR ERROS DO BANCO
+                $budgetItem->categoria = $categoriaDestino;
             }
 
-            $budgetItem->valores_mensais = json_encode($mesesValores);
+            $valoresAtuais = json_decode($budgetItem->valores_mensais, true) ?? array_fill_keys(range(1, 12), 0);
+            foreach ($mesesDominadosPelaSsw as $m) {
+                $valoresAtuais[$m] = $mesesValores[$m];
+            }
+            
+            $budgetItem->valores_mensais = json_encode($valoresAtuais);
             $budgetItem->save();
         }
     }
 
-    // ==========================================
-    // HELPERS DE LIMPEZA DE DADOS
-    // ==========================================
     private function formatarData($dataString)
     {
         $dataString = trim($dataString);
         if (empty($dataString)) return null;
-        
-        try {
-            return Carbon::createFromFormat('d/m/y', $dataString)->format('Y-m-d');
-        } catch (\Exception $e) {
-            try {
-                return Carbon::createFromFormat('d/m/Y', $dataString)->format('Y-m-d');
-            } catch (\Exception $e2) {
-                return null;
-            }
+        try { return Carbon::createFromFormat('d/m/y', $dataString)->format('Y-m-d'); } 
+        catch (\Exception $e) {
+            try { return Carbon::createFromFormat('d/m/Y', $dataString)->format('Y-m-d'); } 
+            catch (\Exception $e2) { return null; }
         }
     }
 
@@ -225,10 +277,8 @@ class SyncSswCommand extends Command
     {
         $valorString = trim($valorString);
         if (empty($valorString)) return 0;
-        
         $valorString = str_replace('.', '', $valorString); 
         $valorString = str_replace(',', '.', $valorString); 
-        
         return (float) $valorString;
     }
 }
